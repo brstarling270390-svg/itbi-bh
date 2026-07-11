@@ -1,0 +1,26 @@
+ITBI BH — COMO ABRIR O APLICATIVO
+
+O aplicativo não precisa ser programado nem configurado manualmente.
+
+NO WINDOWS
+
+1. Extraia todo o conteúdo do arquivo ZIP para uma pasta do computador.
+2. Instale o Python 3.11 ou superior pelo site oficial do Python.
+   IMPORTANTE: durante a instalação, marque a opção "Add Python to PATH".
+3. Dê dois cliques no arquivo INICIAR_APP_WINDOWS.bat.
+4. Aguarde. Na primeira abertura, o computador instalará os componentes necessários.
+5. O navegador abrirá o aplicativo.
+6. Clique em "Baixar e preparar a base completa da PBH".
+
+A primeira carga pode levar alguns minutos porque o histórico da PBH é grande.
+Depois, as consultas ficam armazenadas localmente e abrem mais rápido.
+
+PARA TESTAR SEM BAIXAR A BASE COMPLETA
+
+Na tela inicial, clique em "Abrir com base de demonstração".
+A demonstração tem apenas alguns registros fictícios e exemplos extraídos da estrutura pública.
+Para voltar à base completa, use o botão "Atualizar dados da PBH".
+
+IMPORTANTE
+
+O aplicativo consulta valor declarado e base de cálculo. A base pública não possui um campo que permita afirmar diretamente o valor individual efetivamente recolhido de ITBI.

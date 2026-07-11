@@ -1,0 +1,16 @@
+ITBI BH — VERSÃO PARA CELULAR
+
+O aplicativo precisa ser publicado na internet para funcionar no iPhone fora da sua rede doméstica.
+
+FORMA RECOMENDADA
+1. Crie uma conta gratuita no GitHub.
+2. Crie uma conta no Streamlit Community Cloud usando o GitHub.
+3. Envie os arquivos desta pasta para um repositório no GitHub.
+4. No Streamlit Community Cloud, escolha “Create app”.
+5. Selecione o repositório e informe app.py como arquivo principal.
+6. Depois da publicação, abra o endereço gerado no Safari.
+7. Toque em Compartilhar > Adicionar à Tela de Início.
+
+A versão recente, recomendada para celular, baixa apenas os arquivos mensais desde junho de 2024. O histórico completo desde 2008 continua disponível como opção, mas é mais pesado.
+
+Não é necessário instalar Python no celular.
