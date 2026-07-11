@@ -1,24 +1,24 @@
-# Quanto Vale BH — v3
+# Quanto Vale BH — v5 amigável
 
-Aplicativo Streamlit para transformar os dados públicos de ITBI da Prefeitura de Belo Horizonte em uma experiência orientada à pergunta: **quanto vale um imóvel parecido com este?**
+Aplicativo Streamlit para consultar transações imobiliárias declaradas à Prefeitura de Belo Horizonte.
 
-## Fluxo principal
+## Objetivo desta versão
 
-1. Informe bairro, tipo de imóvel e área.
-2. Opcionalmente informe ano de construção e padrão de acabamento.
-3. O app seleciona transações comparáveis em camadas de recência e tolerância de área.
-4. Exibe faixa observada, referência central, mediana por m² e as transações mais semelhantes.
+A v5 preserva as funções da v4 e melhora apenas a experiência de uso:
 
-A faixa é uma referência estatística baseada em valores declarados ao ITBI. Não constitui laudo de avaliação.
+- identidade visual mais clara;
+- linguagem menos técnica;
+- melhor hierarquia de títulos e textos;
+- formulários em cartões;
+- indicadores destacados;
+- navegação mais confortável no celular;
+- explicações mais simples sobre os dados.
 
-## Publicar atualização
+## Áreas
 
-Substitua o conteúdo do repositório no GitHub pelos arquivos desta versão ou, no GitHub, use **Add file → Upload files**, envie os arquivos e confirme em **Commit changes**. O Streamlit Community Cloud normalmente refaz o deploy automaticamente após o commit.
+- Avaliar imóvel
+- Explorar transações
+- Mercado
+- Dados
 
-## Versão 4
-
-- Mantém a área de exploração das transações como navegação própria.
-- Torna o padrão de acabamento um critério visível na avaliação.
-- Prioriza comparáveis do mesmo padrão antes de ampliar a amostra.
-- Exibe o padrão de acabamento nos cartões de transações.
-- Permite filtrar a consulta por padrão de acabamento.
+A fonte dos dados é o Portal de Dados Abertos da Prefeitura de Belo Horizonte.

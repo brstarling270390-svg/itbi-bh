@@ -27,23 +27,130 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    .block-container {padding-top: 1.1rem; padding-bottom: 3rem; max-width: 1100px;}
-    [data-testid="stMetricValue"] {font-size: 1.55rem;}
-    .hero {padding: .2rem 0 .8rem;}
-    .eyebrow {font-size: .78rem; text-transform: uppercase; letter-spacing: .09em; opacity: .62; font-weight: 700;}
-    .result-box {padding: 1.15rem 1.2rem; border: 1px solid rgba(128,128,128,.28); border-radius: 1rem; margin: .4rem 0 1rem;}
-    .result-title {font-size: .85rem; opacity: .72; margin-bottom: .15rem;}
-    .result-value {font-size: 2rem; font-weight: 750; line-height: 1.1;}
-    .muted {opacity: .7; font-size: .9rem;}
+    :root {
+        --qv-card: rgba(255,255,255,.035);
+        --qv-border: rgba(255,255,255,.10);
+        --qv-muted: rgba(255,255,255,.68);
+    }
+
+    .block-container {
+        padding-top: 1.15rem;
+        padding-bottom: 3rem;
+        max-width: 1040px;
+    }
+
+    [data-testid="stHeader"] {background: transparent;}
+    [data-testid="stMetric"] {
+        background: var(--qv-card);
+        border: 1px solid var(--qv-border);
+        border-radius: 16px;
+        padding: .85rem 1rem;
+    }
+    [data-testid="stMetricLabel"] {opacity: .72;}
+    [data-testid="stMetricValue"] {font-size: 1.45rem;}
+
+    div[data-testid="stForm"] {
+        border: 1px solid var(--qv-border);
+        border-radius: 18px;
+        padding: 1rem 1.05rem .8rem;
+        background: var(--qv-card);
+    }
+
+    div[data-baseweb="select"] > div,
+    div[data-baseweb="input"] > div,
+    [data-testid="stDateInput"] input {
+        border-radius: 10px !important;
+    }
+
+    .brand {
+        padding: .2rem 0 .35rem;
+    }
+    .brand-name {
+        font-size: .88rem;
+        font-weight: 800;
+        letter-spacing: .08em;
+        text-transform: uppercase;
+        opacity: .76;
+        margin-bottom: .35rem;
+    }
+    .brand-title {
+        font-size: 2.25rem;
+        font-weight: 800;
+        line-height: 1.08;
+        margin: 0;
+    }
+    .brand-subtitle {
+        color: var(--qv-muted);
+        font-size: 1rem;
+        margin-top: .55rem;
+        max-width: 760px;
+    }
+
+    .section-intro {
+        color: var(--qv-muted);
+        margin-top: -.35rem;
+        margin-bottom: 1rem;
+    }
+
+    .result-box {
+        padding: 1.25rem 1.3rem;
+        border: 1px solid rgba(255,255,255,.13);
+        border-radius: 18px;
+        margin: .5rem 0 1rem;
+        background: linear-gradient(135deg, rgba(255,255,255,.055), rgba(255,255,255,.022));
+    }
+    .result-title {
+        font-size: .86rem;
+        opacity: .72;
+        margin-bottom: .25rem;
+    }
+    .result-value {
+        font-size: 2rem;
+        font-weight: 800;
+        line-height: 1.12;
+    }
+    .muted {
+        opacity: .68;
+        font-size: .9rem;
+        margin-top: .35rem;
+    }
+
+    div[data-testid="stSegmentedControl"] button {
+        min-height: 2.7rem;
+        border-radius: 10px !important;
+        font-weight: 650;
+    }
+
+    .data-note {
+        border-left: 3px solid rgba(255,255,255,.28);
+        padding: .15rem 0 .15rem .85rem;
+        color: var(--qv-muted);
+        font-size: .88rem;
+        margin: .8rem 0 1.1rem;
+    }
+
     @media (max-width: 768px) {
-        .block-container {padding: .7rem .8rem 2rem;}
-        h1 {font-size: 1.85rem !important; line-height: 1.12 !important;}
+        .block-container {padding: .8rem .75rem 2.2rem;}
+        .brand-title {font-size: 1.85rem;}
+        .brand-subtitle {font-size: .92rem;}
         h2 {font-size: 1.35rem !important;}
-        [data-testid="stMetricValue"] {font-size: 1.25rem;}
+        h3 {font-size: 1.18rem !important;}
+        [data-testid="stMetricValue"] {font-size: 1.2rem;}
         [data-testid="stHorizontalBlock"] {flex-wrap: wrap;}
-        [data-testid="column"] {min-width: 100% !important; width: 100% !important; flex: 1 1 100% !important;}
+        [data-testid="column"] {
+            min-width: 100% !important;
+            width: 100% !important;
+            flex: 1 1 100% !important;
+        }
         button {min-height: 2.9rem;}
-        .result-value {font-size: 1.7rem;}
+        .result-value {font-size: 1.65rem;}
+        div[data-testid="stSegmentedControl"] {
+            overflow-x: auto;
+            padding-bottom: .15rem;
+        }
+        div[data-testid="stSegmentedControl"] button {
+            white-space: nowrap;
+        }
     }
     </style>
     """,
@@ -290,9 +397,18 @@ def monthly_series(bairro: str | None, tipo: str | None, date_start, date_end) -
         ).fetchdf()
 
 
-st.markdown('<div class="hero"><div class="eyebrow">Dados públicos · Belo Horizonte</div></div>', unsafe_allow_html=True)
-st.title("Quanto vale este imóvel?")
-st.caption("Use transações declaradas à PBH para encontrar imóveis comparáveis e uma faixa de referência.")
+st.markdown(
+    """
+    <div class="brand">
+      <div class="brand-name">Quanto Vale BH</div>
+      <div class="brand-title">Imóveis de Belo Horizonte, com dados reais de transações.</div>
+      <div class="brand-subtitle">
+        Consulte negócios registrados, encontre imóveis comparáveis e acompanhe valores por metro quadrado usando dados públicos da Prefeitura de Belo Horizonte.
+      </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 if not database_exists():
     st.info("Na primeira utilização, prepare a base recente da PBH.")
@@ -318,9 +434,14 @@ screen = st.segmented_control(
     default="Avaliar imóvel",
     label_visibility="collapsed",
 )
+st.markdown(
+    f'<div class="data-note">Base pública da PBH · {number_br(metadata.get("registros", metadata.get("registros_unicos")))} registros disponíveis · dados até {metadata.get("data_final") or "—"}</div>',
+    unsafe_allow_html=True,
+)
 
 if screen == "Avaliar imóvel":
-    st.subheader("Descreva o imóvel")
+    st.subheader("Avaliar um imóvel")
+    st.markdown('<div class="section-intro">Informe as características principais. O app busca transações semelhantes e apresenta uma faixa de referência.</div>', unsafe_allow_html=True)
     with st.form("avaliacao"):
         bairro = st.selectbox("Bairro", dimensions["bairros"], index=None, placeholder="Selecione o bairro")
         tipo = st.selectbox(
@@ -330,7 +451,7 @@ if screen == "Avaliar imóvel":
             format_func=lambda code: TYPE_LABELS.get(code, code),
             placeholder="Selecione o tipo",
         )
-        area = st.number_input("Área construída adquirida (m²)", min_value=10.0, max_value=10000.0, value=90.0, step=5.0)
+        area = st.number_input("Área do imóvel (m²)", min_value=10.0, max_value=10000.0, value=90.0, step=5.0)
         padrao = st.selectbox(
             "Padrão de acabamento",
             dimensions["padroes"],
@@ -343,7 +464,7 @@ if screen == "Avaliar imóvel":
             current_year = pd.Timestamp.today().year
             ano_known = st.checkbox("Informar ano de construção")
             ano = st.number_input("Ano de construção", min_value=1800, max_value=current_year, value=2000, step=1, disabled=not ano_known)
-        submitted = st.form_submit_button("Encontrar imóveis comparáveis", type="primary", width="stretch")
+        submitted = st.form_submit_button("Ver imóveis comparáveis", type="primary", width="stretch")
 
     if submitted:
         if not bairro or not tipo:
@@ -380,8 +501,8 @@ if screen == "Avaliar imóvel":
             unsafe_allow_html=True,
         )
         c1, c2 = st.columns(2)
-        c1.metric("Comparáveis usados", number_br(stats["records"]))
-        c2.metric("Janela analisada", f"{stats.get('months', '—')} meses")
+        c1.metric("Imóveis comparáveis", number_br(stats["records"]))
+        c2.metric("Período considerado", f"{stats.get('months', '—')} meses")
         st.caption(
             f"Perfil pesquisado: {TYPE_LABELS.get(subject['tipo'], subject['tipo'])}, {number_br(subject['area'], 1)} m², {subject['bairro']}"
             f"{f', padrão {subject['padrao']}' if subject.get('padrao') else ''}. "
@@ -394,7 +515,7 @@ if screen == "Avaliar imóvel":
                 st.info(f"O padrão {subject['padrao']} foi priorizado, mas a amostra precisou ser ampliada para padrões diferentes por falta de registros suficientes.")
         st.warning("É uma referência estatística baseada em dados declarados ao ITBI. Não é laudo de avaliação nem preço de anúncio.")
 
-        st.subheader("Transações mais semelhantes")
+        st.subheader("Imóveis usados como referência")
         for _, row in comparables.head(10).iterrows():
             with st.container(border=True):
                 st.markdown(f"**{row['endereco']}**")
@@ -409,7 +530,8 @@ if screen == "Avaliar imóvel":
                 c2.metric("Valor por m²", brl(row["valor_m2_declarado"], 2))
 
 elif screen == "Explorar transações":
-    st.subheader("Pesquisar registros")
+    st.subheader("Encontrar transações")
+    st.markdown('<div class="section-intro">Pesquise por rua, endereço ou bairro e refine pelos filtros disponíveis.</div>', unsafe_allow_html=True)
     with st.form("consulta"):
         text = st.text_input("Rua, endereço ou bairro", placeholder="Ex.: Rua Alcântara 399")
         bairros = st.multiselect("Bairro", dimensions["bairros"], placeholder="Todos os bairros")
@@ -426,16 +548,16 @@ elif screen == "Explorar transações":
         )
         default_start = max(dimensions["min_date"], dimensions["max_date"] - timedelta(days=730))
         dates = st.date_input(
-            "Período da quitação",
+            "Período da transação",
             value=(default_start, dimensions["max_date"]),
             min_value=dimensions["min_date"],
             max_value=dimensions["max_date"],
         )
-        st.form_submit_button("Pesquisar", type="primary", width="stretch")
+        st.form_submit_button("Buscar transações", type="primary", width="stretch")
     date_start, date_end = dates if isinstance(dates, tuple) and len(dates) == 2 else (dates, dates)
     result, stats = query_transactions(text, bairros, tipos, padroes, date_start, date_end)
     c1, c2, c3 = st.columns(3)
-    c1.metric("Transações", number_br(stats["records"]))
+    c1.metric("Negócios encontrados", number_br(stats["records"]))
     c2.metric("Mediana do valor", brl(stats["median_value"]))
     c3.metric("Mediana por m²", brl(stats["median_m2"], 2))
     if result.empty:
@@ -458,7 +580,8 @@ elif screen == "Explorar transações":
         st.download_button("Baixar resultados em CSV", csv, "transacoes_itbi_bh.csv", "text/csv", width="stretch")
 
 elif screen == "Mercado":
-    st.subheader("Evolução do mercado")
+    st.subheader("Acompanhar o mercado")
+    st.markdown('<div class="section-intro">Veja a evolução mensal do valor mediano por metro quadrado e do número de transações.</div>', unsafe_allow_html=True)
     bairro_market = st.selectbox("Bairro", [None] + dimensions["bairros"], format_func=lambda x: "Todos os bairros" if x is None else x)
     tipo_market = st.selectbox(
         "Tipo de imóvel",
@@ -473,12 +596,13 @@ elif screen == "Mercado":
         fig = px.line(series, x="mes", y="mediana_m2", markers=True, labels={"mes": "Mês", "mediana_m2": "Mediana por m²"})
         fig.update_layout(yaxis_tickprefix="R$ ", hovermode="x unified", margin=dict(l=10, r=10, t=20, b=10))
         st.plotly_chart(fig, width="stretch")
-        fig2 = px.bar(series, x="mes", y="transacoes", labels={"mes": "Mês", "transacoes": "Transações"})
+        fig2 = px.bar(series, x="mes", y="transacoes", labels={"mes": "Mês", "transacoes": "Negócios encontrados"})
         fig2.update_layout(margin=dict(l=10, r=10, t=20, b=10))
         st.plotly_chart(fig2, width="stretch")
 
 else:
-    st.subheader("Dados e atualização")
+    st.subheader("Sobre os dados")
+    st.markdown('<div class="section-intro">Confira o período disponível e atualize a base quando a PBH publicar novos arquivos.</div>', unsafe_allow_html=True)
     c1, c2 = st.columns(2)
     c1.metric("Registros", number_br(metadata.get("registros", metadata.get("registros_unicos"))))
     c2.metric("Dados até", metadata.get("data_final") or "—")
@@ -492,9 +616,11 @@ else:
             run_update(include_historical=True)
     st.markdown(
         """
-        **Valor declarado** é o valor de aquisição informado pelo contribuinte. **Base de cálculo** é o valor considerado para tributação. A base pública não apresenta um campo individual com o montante efetivamente recolhido de ITBI.
+        **Como ler os valores:** o **valor declarado** corresponde ao valor da aquisição informado pelo contribuinte. A **base de cálculo** é o valor considerado para tributação pela administração municipal. A base pública não informa, em campo próprio, o valor individual efetivamente recolhido de ITBI.
 
-        No iPhone, abra o app no Safari, toque em **Compartilhar** e escolha **Adicionar à Tela de Início**.
+        Este aplicativo é uma ferramenta de consulta e referência. As estimativas não substituem laudo técnico de avaliação.
+
+        **No iPhone:** abra no Safari, toque em **Compartilhar** e selecione **Adicionar à Tela de Início**.
         """
     )
     st.link_button("Fonte oficial da PBH", "https://dados.pbh.gov.br/dataset/itbi-relatorios", width="stretch")
