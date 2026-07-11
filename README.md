@@ -1,24 +1,13 @@
-# Quanto Vale BH — versão final
+# Quanto Vale BH — versão final v2
 
-Aplicativo Streamlit para consulta de transações imobiliárias declaradas à Prefeitura de Belo Horizonte.
+Aplicativo Streamlit para consultar transações imobiliárias declaradas à Prefeitura de Belo Horizonte.
 
-## Áreas
+## Ajustes desta revisão
 
-- Avaliar: encontra transações comparáveis e apresenta uma faixa estatística de referência.
-- Transações: pesquisa livre por rua, endereço ou bairro, com filtros.
-- Mercado: acompanha mediana por m² e volume mensal de transações.
-- Sobre: explica a fonte, a leitura dos dados e a atualização da base.
+- Corrige o campo de ano de construção, que agora pode ser digitado diretamente e também pode ficar vazio.
+- Acrescenta rua como critério opcional na avaliação.
+- Quando a rua é informada, o algoritmo tenta primeiro usar comparáveis da mesma rua.
+- Se a amostra da rua for pequena, amplia para o bairro e ainda prioriza registros da rua no ranking.
+- Mantém bairro, tipo, área, padrão de acabamento, ano e recência como critérios de comparabilidade.
 
-## Ajustes finais de experiência
-
-- linguagem mais direta e tecnicamente precisa;
-- navegação curta para celular;
-- endereços resumidos e legíveis;
-- visual compatível com tema claro ou escuro;
-- cor de ação azul;
-- base carregada automaticamente na primeira abertura;
-- manutenção da base retirada do fluxo principal;
-- indicação clara de quantos resultados são exibidos;
-- explicação simples do método de comparáveis.
-
-Fonte: Portal de Dados Abertos da Prefeitura de Belo Horizonte.
+A fonte dos dados é o Portal de Dados Abertos da Prefeitura de Belo Horizonte.

@@ -341,66 +341,128 @@ def valuation_query(
     area: float,
     ano: int | None,
     padrao: str | None,
+    rua: str | None,
     end_date,
 ) -> tuple[pd.DataFrame, dict]:
-    """Busca comparáveis em camadas, priorizando padrão de acabamento quando informado."""
-    scenarios = [
-        # meses, tolerância de área, mínimo, exigir mesmo padrão
-        (24, 0.20, 8, True),
-        (36, 0.30, 6, True),
-        (60, 0.35, 5, True),
-        (36, 0.30, 8, False),
-        (60, 0.40, 6, False),
-        (120, 0.50, 4, False),
-    ]
+    """Busca comparáveis em camadas, priorizando rua, padrão, área, idade e recência."""
+    rua_search = normalize_text(rua)
+
+    scenarios: list[tuple[int, float, int, bool, str]] = []
+
+    # Primeiro tenta formar uma amostra apenas na mesma rua.
+    if rua_search:
+        if padrao:
+            scenarios.append((60, 0.35, 4, True, "street"))
+        scenarios.append((120, 0.50, 3, False, "street"))
+
+    # Depois amplia para o bairro, mantendo imóveis da rua no topo do ranking.
+    if padrao:
+        scenarios.extend([
+            (24, 0.20, 8, True, "neighborhood"),
+            (36, 0.30, 6, True, "neighborhood"),
+            (60, 0.35, 5, True, "neighborhood"),
+        ])
+
+    scenarios.extend([
+        (36, 0.30, 8, False, "neighborhood"),
+        (60, 0.40, 6, False, "neighborhood"),
+        (120, 0.50, 4, False, "neighborhood"),
+    ])
+
     chosen = None
     frame = pd.DataFrame()
 
     with connect_read_only() as con:
-        for months, area_tol, minimum, strict_pattern in scenarios:
+        for months, area_tol, minimum, strict_pattern, location_level in scenarios:
             start_date = pd.Timestamp(end_date) - pd.DateOffset(months=months)
             area_min = max(area * (1 - area_tol), 1)
             area_max = area * (1 + area_tol)
-            pattern_clause = " AND padrao_acabamento = ?" if (padrao and strict_pattern) else ""
-            params = [
-                area, area, ano, ano, padrao, padrao,
-                area, area, ano, ano, padrao, padrao,
-                bairro, tipo, start_date.date(), end_date, area_min, area_max,
+
+            where = [
+                "bairro = ?",
+                "tipo_construtivo = ?",
+                "data_quitacao BETWEEN ? AND ?",
+                "area_construida BETWEEN ? AND ?",
+                "valor_declarado > 0",
+                "valor_m2_declarado BETWEEN 300 AND 100000",
             ]
+            params: list[object] = [
+                bairro,
+                tipo,
+                start_date.date(),
+                end_date,
+                area_min,
+                area_max,
+            ]
+
             if padrao and strict_pattern:
+                where.append("padrao_acabamento = ?")
                 params.append(padrao)
+
+            if rua_search and location_level == "street":
+                where.append("endereco_busca LIKE ?")
+                params.append(f"%{rua_search}%")
+
             frame = con.execute(
                 f"""
-                SELECT data_quitacao, endereco, bairro, tipo_construtivo, tipo_descricao,
-                       ano_construcao, area_construida, padrao_acabamento,
-                       valor_declarado, valor_base_calculo, valor_m2_declarado,
-                       ABS(area_construida - ?) / ? AS dist_area,
-                       CASE WHEN ? IS NULL OR ano_construcao IS NULL THEN 0.18
-                            ELSE LEAST(ABS(ano_construcao - ?) / 35.0, 1.0) END AS dist_ano,
-                       CASE WHEN ? IS NULL OR padrao_acabamento = ? THEN 0 ELSE 0.35 END AS penalidade_padrao,
-                       (ABS(area_construida - ?) / ?)
-                       + CASE WHEN ? IS NULL OR ano_construcao IS NULL THEN 0.18
-                              ELSE LEAST(ABS(ano_construcao - ?) / 35.0, 1.0) END
-                       + CASE WHEN ? IS NULL OR padrao_acabamento = ? THEN 0 ELSE 0.35 END AS score
+                SELECT data_quitacao, endereco, endereco_busca, bairro,
+                       tipo_construtivo, tipo_descricao, ano_construcao,
+                       area_construida, padrao_acabamento, valor_declarado,
+                       valor_base_calculo, valor_m2_declarado
                 FROM transactions
-                WHERE bairro = ?
-                  AND tipo_construtivo = ?
-                  AND data_quitacao BETWEEN ? AND ?
-                  AND area_construida BETWEEN ? AND ?
-                  AND valor_declarado > 0
-                  AND valor_m2_declarado BETWEEN 300 AND 100000
-                  {pattern_clause}
-                ORDER BY score, data_quitacao DESC
-                LIMIT 80
+                WHERE {' AND '.join(where)}
+                ORDER BY
+                    CASE WHEN ? = '' OR endereco_busca LIKE ? THEN 0 ELSE 1 END,
+                    data_quitacao DESC
+                LIMIT 1000
                 """,
-                params,
+                [*params, rua_search, f"%{rua_search}%"],
             ).fetchdf()
+
+            if frame.empty:
+                continue
+
+            frame["dist_area"] = (frame["area_construida"] - area).abs() / area
+
+            if ano is None:
+                frame["dist_ano"] = 0.18
+            else:
+                year_distance = (frame["ano_construcao"].astype("Float64") - ano).abs() / 35.0
+                frame["dist_ano"] = year_distance.clip(upper=1.0).fillna(0.18).astype(float)
+
+            if padrao is None:
+                frame["penalidade_padrao"] = 0.0
+            else:
+                frame["penalidade_padrao"] = (
+                    frame["padrao_acabamento"].fillna("").ne(padrao).astype(float) * 0.35
+                )
+
+            if rua_search:
+                same_street = frame["endereco_busca"].fillna("").str.contains(
+                    rua_search, regex=False
+                )
+                frame["penalidade_local"] = (~same_street).astype(float) * 0.45
+            else:
+                frame["penalidade_local"] = 0.0
+
+            frame["score"] = (
+                frame["dist_area"]
+                + frame["dist_ano"]
+                + frame["penalidade_padrao"]
+                + frame["penalidade_local"]
+            )
+            frame = frame.sort_values(
+                ["score", "data_quitacao"],
+                ascending=[True, False],
+            ).reset_index(drop=True)
+
             if len(frame) >= minimum:
                 chosen = {
                     "months": months,
                     "area_tol": area_tol,
                     "minimum": minimum,
                     "strict_pattern": bool(padrao and strict_pattern),
+                    "location_level": location_level,
                 }
                 break
 
@@ -545,6 +607,11 @@ if screen == "Avaliar":
     st.markdown('<div class="section-intro">Informe as características principais. O app busca transações semelhantes e apresenta uma faixa de referência.</div>', unsafe_allow_html=True)
     with st.form("avaliacao"):
         bairro = st.selectbox("Bairro", dimensions["bairros"], index=None, placeholder="Selecione o bairro")
+        rua = st.text_input(
+            "Rua (opcional)",
+            placeholder="Ex.: Rua Angra",
+            help="Quando informada, o app tenta primeiro formar a amostra com imóveis da mesma rua. Se houver poucos registros, amplia a busca para o bairro.",
+        )
         tipo = st.selectbox(
             "Tipo de imóvel",
             dimensions["tipos"],
@@ -560,10 +627,17 @@ if screen == "Avaliar":
             placeholder="Selecione, se souber",
             help="Quando informado, o app prioriza transações do mesmo padrão de acabamento. Isso tende a melhorar a comparabilidade.",
         )
-        with st.expander("Ano de construção (opcional)"):
-            current_year = pd.Timestamp.today().year
-            ano_known = st.checkbox("Informar ano de construção")
-            ano = st.number_input("Ano de construção", min_value=1800, max_value=current_year, value=2000, step=1, disabled=not ano_known)
+        current_year = pd.Timestamp.today().year
+        ano = st.number_input(
+            "Ano de construção (opcional)",
+            min_value=1800,
+            max_value=current_year,
+            value=None,
+            step=1,
+            format="%d",
+            placeholder="Ex.: 2000",
+            help="Deixe em branco se não souber.",
+        )
         submitted = st.form_submit_button("Ver imóveis comparáveis", type="primary", width="stretch")
 
     if submitted:
@@ -574,8 +648,9 @@ if screen == "Avaliar":
                 bairro=bairro,
                 tipo=tipo,
                 area=float(area),
-                ano=int(ano) if ano_known else None,
+                ano=int(ano) if ano is not None else None,
                 padrao=padrao,
+                rua=rua,
                 end_date=dimensions["max_date"],
             )
             if comparables.empty:
@@ -583,7 +658,14 @@ if screen == "Avaliar":
             else:
                 st.session_state["last_comparables"] = comparables
                 st.session_state["last_valuation"] = stats
-                st.session_state["last_subject"] = {"bairro": bairro, "tipo": tipo, "area": area, "padrao": padrao}
+                st.session_state["last_subject"] = {
+                    "bairro": bairro,
+                    "rua": rua.strip() if rua else None,
+                    "tipo": tipo,
+                    "area": area,
+                    "padrao": padrao,
+                    "ano": int(ano) if ano is not None else None,
+                }
 
     if "last_valuation" in st.session_state:
         stats = st.session_state["last_valuation"]
@@ -603,11 +685,22 @@ if screen == "Avaliar":
         c1, c2 = st.columns(2)
         c1.metric("Imóveis comparáveis", number_br(stats["records"]))
         c2.metric("Período considerado", f"{stats.get('months', '—')} meses")
+        location_text = f", {subject['rua']}" if subject.get("rua") else ""
+        year_text = f", construção {subject['ano']}" if subject.get("ano") else ""
         st.caption(
-            f"Perfil pesquisado: {TYPE_LABELS.get(subject['tipo'], subject['tipo'])}, {number_br(subject['area'], 1)} m², {subject['bairro']}"
-            f"{f', padrão {subject['padrao']}' if subject.get('padrao') else ''}. "
+            f"Perfil pesquisado: {TYPE_LABELS.get(subject['tipo'], subject['tipo'])}, "
+            f"{number_br(subject['area'], 1)} m², {subject['bairro']}{location_text}"
+            f"{f', padrão {subject['padrao']}' if subject.get('padrao') else ''}{year_text}. "
             f"A faixa é baseada no intervalo central dos valores por m² das transações mais semelhantes."
         )
+        if subject.get("rua"):
+            if stats.get("location_level") == "street":
+                st.info(f"A amostra foi formada com transações encontradas na mesma rua informada ({subject['rua']}).")
+            else:
+                st.info(
+                    f"A rua {subject['rua']} foi priorizada, mas havia poucos registros comparáveis; "
+                    "por isso, a amostra precisou ser ampliada para o restante do bairro."
+                )
         if subject.get("padrao"):
             if stats.get("strict_pattern"):
                 st.info(f"Os comparáveis usados nesta estimativa são do mesmo padrão de acabamento ({subject['padrao']}).")
@@ -616,7 +709,12 @@ if screen == "Avaliar":
         st.caption("Referência estatística baseada em valores declarados ao ITBI. Não substitui laudo técnico de avaliação.")
 
         with st.expander("Como a faixa de referência é calculada?"):
-            st.write("O app seleciona transações do mesmo bairro e tipo de imóvel, prioriza áreas semelhantes, recência, ano de construção e padrão de acabamento quando informado. A faixa usa o intervalo central dos valores por m² dos comparáveis, reduzindo o peso de valores extremos.")
+            st.write(
+                "O app seleciona transações do mesmo tipo de imóvel. Quando uma rua é informada, tenta primeiro formar a amostra na própria rua; "
+                "se não houver registros suficientes, amplia para o bairro e mantém os imóveis da rua com prioridade no ranking. "
+                "Também considera área, recência, ano de construção e padrão de acabamento. A faixa usa o intervalo central dos valores por m², "
+                "reduzindo o peso de valores extremos."
+            )
 
         st.subheader("Imóveis usados como referência")
         for _, row in comparables.head(10).iterrows():
