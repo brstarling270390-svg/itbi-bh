@@ -123,3 +123,11 @@ Portanto:
 - não há erro conhecido remanescente após esta revisão;
 - não é honesto afirmar que um software está matematicamente livre de qualquer bug;
 - este é o pacote que deve substituir a versão híbrida anterior.
+
+ADENDO DE DEPLOY — PYTHON 3.14 / 11-07-2026
+Após a publicação, o Streamlit Community Cloud provisionou o app em Python 3.14.6.
+Foi identificado que requirements.txt ainda fixava pandas==2.2.3, versão sem wheel cp314 no PyPI.
+O provisionamento ficou parado em "Processing dependencies" após "Resolved 48 packages".
+A dependência foi corrigida para pandas==2.3.3, que possui wheels oficiais para CPython 3.14.
+O conjunto de dependências foi resolvido para alvo Python 3.14/Linux e instalado em ambiente isolado.
+Os 13 testes automatizados passaram novamente com pandas 2.3.3.
