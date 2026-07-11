@@ -1,0 +1,20 @@
+{
+  "dataset_id": "0e13bf71-5355-47ce-8607-966413b08c0a",
+  "generated_at": "2026-07-11T18:19:32",
+  "resources": [
+    {
+      "resource_id": "demo",
+      "name": "Base de demonstração",
+      "url": "local",
+      "modified": "2026-07-11",
+      "size": 2038,
+      "hash_value": null
+    }
+  ],
+  "registros_lidos": 10,
+  "registros": 10,
+  "registros_unicos": 10,
+  "data_inicial": "2025-07-18",
+  "data_final": "2026-05-01",
+  "bairros": 6
+}
