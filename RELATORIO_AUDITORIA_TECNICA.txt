@@ -1,0 +1,125 @@
+QUANTO VALE BH — RELATÓRIO DE AUDITORIA TÉCNICA
+Data da revisão: 11/07/2026
+Versão: AUDITADA FINAL
+
+CONCLUSÃO
+Não é tecnicamente possível provar a inexistência absoluta de qualquer bug em um aplicativo.
+A revisão, porém, foi feita sobre o aplicativo inteiro e encontrou problemas reais na versão
+híbrida anterior. Esses problemas foram corrigidos antes da geração deste pacote.
+
+NÃO UTILIZAR COMO VERSÃO FINAL O ARQUIVO ANTERIOR:
+Quanto_Vale_BH_METODOLOGIA_HIBRIDA.zip
+
+PRINCIPAIS PROBLEMAS ENCONTRADOS E CORRIGIDOS
+
+1. COMPARÁVEIS ANTIGOS DEMAIS
+A versão anterior podia ampliar a busca de comparáveis para até 120 meses.
+Isso permitia que uma transação antiga, mas muito parecida em área/padrão, influenciasse
+indevidamente uma avaliação apresentada como atual.
+CORREÇÃO: janela máxima reduzida para 36 meses; recência entrou no ranking; apartamentos
+anteriores ao mês mais recente do FipeZAP são normalizados temporalmente.
+
+2. AMOSTRA ABAIXO DO MÍNIMO
+Se nenhum cenário atingisse a amostra mínima, a função podia continuar usando a última
+amostra não vazia e produzir uma estimativa.
+CORREÇÃO: sem atingir o mínimo do cenário, não há estimativa.
+
+3. DUPLA UTILIZAÇÃO DA TRANSAÇÃO DE ORIGEM
+Ao clicar em avaliar uma transação, o próprio registro podia reaparecer entre os comparáveis.
+CORREÇÃO: o registro de origem é explicitamente excluído da amostra.
+
+4. DATA POSTERIOR À SÉRIE FIPEZAP
+Uma data inicial posterior ao último mês disponível podia resultar em fator 1,0 e parecer
+uma atualização válida.
+CORREÇÃO: o fator retorna ausência de referência quando a data inicial está fora da série
+ou quando a data final é anterior à inicial.
+
+5. ATUALIZAÇÃO DE RECURSO CORRIGIDO PELA PBH
+A atualização manual podia reutilizar um arquivo local já baixado. Isso era inadequado para
+casos em que a PBH substitui/corrige um recurso mantendo a publicação.
+CORREÇÃO: a atualização manual força novo download dos recursos.
+
+6. ESTADO DE NAVEGAÇÃO DO STREAMLIT
+Havia uma combinação de valor padrão do widget e valor gravado em Session State que gerava
+aviso de estado inconsistente.
+CORREÇÃO: a navegação pendente passou a definir o valor inicial sem duplicar a atribuição.
+
+7. PAINEL DE MERCADO MISTURANDO TIPOLOGIAS
+O padrão inicial reunia apartamentos, casas, lotes, salas e outros tipos no mesmo indicador
+de valor por m².
+CORREÇÃO: Apartamento passou a ser o padrão inicial. "Todos os tipos" continua disponível
+com aviso metodológico.
+
+8. QUEBRA DE ESQUEMA DA PBH PODIA PASSAR SILENCIOSAMENTE
+Se a PBH renomeasse campos essenciais, a normalização podia criar colunas vazias e seguir.
+CORREÇÃO: a carga valida os campos mínimos esperados e falha explicitamente se a estrutura
+essencial mudar.
+
+9. PROTEÇÃO DA BASE DURANTE ATUALIZAÇÃO
+A troca do banco deixava uma pequena janela entre exclusão e substituição do arquivo.
+CORREÇÃO: banco, metadados e série FipeZAP usam arquivo temporário e substituição atômica.
+Uma carga incompatível não substitui o banco anterior.
+
+10. INTERVALO DE DATA INCOMPLETO
+O seletor de período pode, durante a escolha, retornar apenas uma data. A lógica anterior
+poderia encaminhar uma tupla inválida à consulta.
+CORREÇÃO: uma única data é tratada como consulta de um único dia.
+
+VALIDAÇÕES EXECUTADAS
+
+- Compilação completa de todos os arquivos Python: APROVADA.
+- Testes automatizados do pacote: [32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m                                                            [100%][0m
+[32m[32m[1m13 passed[0m[32m in 0.99s[0m[0m
+- 13 testes unitários/funcionais automatizados aprovados.
+- Validação dos nomes atuais e históricos dos recursos PBH no seletor de arquivos.
+- Validação de aliases dos campos atuais e históricos do ITBI.
+- Teste de quebra de esquema: carga rejeitada de forma explícita.
+- Teste de preservação do banco existente após carga inválida: APROVADO.
+- Teste de números no padrão brasileiro: APROVADO.
+- Testes de borda da série FipeZAP: APROVADOS.
+- Série FipeZAP empacotada: 207 meses.
+- Período da série: 04/2009 a 06/2026.
+- Maior diferença do número-índice versus a planilha oficial: 5.684341886080801e-14.
+- Maior diferença do preço/m² versus a planilha oficial: 1.818989403545856e-12.
+- Fator FipeZAP de 12/2019 até a última leitura: 1.582254642350
+  (58.225464%).
+- Banco sintético com 2.200 registros em formato de colunas e números compatível com a PBH:
+  construção e consultas aprovadas.
+- Fluxo completo testado com Streamlit AppTest:
+  * abertura;
+  * ano de construção vazio e editável;
+  * avaliação por comparáveis;
+  * busca de transações;
+  * "Avaliar este imóvel";
+  * "Ver transações deste endereço";
+  * Mercado;
+  * Sobre;
+  * estimativa híbrida manual.
+- Intervalo de data com apenas um dia: sem exceção.
+- Servidor Streamlit real iniciado e endpoint de saúde retornou "ok".
+
+DEPENDÊNCIAS TESTADAS E FIXADAS
+streamlit==1.59.1
+pandas==2.2.3
+duckdb==1.5.4
+requests==2.32.5
+plotly==6.5.2
+openpyxl==3.1.5
+
+LIMITAÇÃO QUE NÃO É BUG DO CÓDIGO
+O Streamlit Community Cloud não garante persistência do armazenamento local. Se a instância
+for recriada, o aplicativo recompõe a base recente e pode solicitar nova carga do histórico
+completo para pesquisar transações antigas. A limitação está informada na aba "Sobre".
+
+LIMITAÇÃO DESTA AUDITORIA
+Neste ambiente de auditoria, o arquivo histórico real de 76,9 MiB da PBH não pôde ser baixado
+integralmente pela rede do ambiente. A versão anterior do app já havia processado o histórico
+no ambiente publicado e localizado uma transação real de 2019. Nesta revisão, os esquemas
+oficiais atual e histórico foram conferidos, a seleção dos recursos foi testada, o parser foi
+testado com o padrão numérico brasileiro e o fluxo integral foi exercitado sobre uma base
+sintética de 2.200 registros no mesmo formato estrutural.
+
+Portanto:
+- não há erro conhecido remanescente após esta revisão;
+- não é honesto afirmar que um software está matematicamente livre de qualquer bug;
+- este é o pacote que deve substituir a versão híbrida anterior.

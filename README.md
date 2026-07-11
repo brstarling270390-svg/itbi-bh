@@ -1,36 +1,58 @@
-# Quanto Vale BH — revisão metodológica final
+# Quanto Vale BH — versão auditada
 
-Aplicativo Streamlit para consultar transações imobiliárias declaradas à Prefeitura de Belo Horizonte.
+Aplicativo Streamlit para consulta e análise de transações imobiliárias declaradas à Prefeitura de Belo Horizonte.
 
-## Regras desta versão
+## Funções
 
-### Valor de referência
+- Consulta de transações por endereço, bairro, tipo, padrão e período.
+- Visualização de outras transações do mesmo endereço.
+- Avaliação por comparáveis recentes.
+- Estimativa híbrida de um valor antigo.
+- Painel de evolução do mercado por valor de referência/m² cadastral.
 
-O aplicativo usa, para cálculos estatísticos:
+## Valor de referência
+
+Para os cálculos estatísticos:
 
 `valor_referencia = max(valor_declarado, valor_base_calculo)`
 
-O indicador por m² é calculado sobre a área construída cadastrada na base da PBH.
+O aplicativo não apresenta esse valor como preço real comprovado de venda. É uma regra analítica de referência.
 
-### Área
+## Área
 
-A interface deixa de chamar o campo simplesmente de "área do imóvel". A expressão usada é "área construída cadastrada na PBH" ou "área cadastral PBH".
+Os cálculos usam a área construída cadastrada na base da PBH. Ela pode diferir da área privativa anunciada. O indicador é apresentado como valor por m² cadastral.
 
-O aplicativo alerta que essa área pode diferir da área privativa de anúncio e pode refletir proporcionalmente áreas comuns e garagem.
+## Comparáveis recentes
 
-### Avaliação
+- Janela máxima de 36 meses.
+- Amostra mínima obrigatória conforme o nível de filtro.
+- Prioridade para rua, área semelhante, padrão, idade e recência.
+- Para apartamentos, valores de meses anteriores são normalizados temporalmente pelo FipeZAP BH antes da mediana.
+- A transação usada como origem de uma avaliação é excluída da própria amostra de comparáveis.
 
-- Comparáveis recentes.
-- Atualização de valor antigo pela evolução de grupos comparáveis.
-- Possibilidade de localizar uma transação antiga e atualizar automaticamente o imóvel para hoje.
-- Botão "Avaliar este imóvel" na aba Transações, carregando área, padrão, ano e tipo diretamente da base.
+## Estimativa híbrida de valor antigo
 
-### Transações
+Para apartamentos, o aplicativo confronta referências complementares:
 
-- Valor de referência.
-- Valor por m² cadastral.
-- Valor declarado e base PBH exibidos separadamente.
-- Botão para ver outras transações do mesmo endereço.
-- Botão para avaliar diretamente o imóvel selecionado.
+1. FipeZAP Belo Horizonte como âncora temporal.
+2. Comparáveis recentes da PBH, normalizados temporalmente quando necessário.
+3. Transações do mesmo endereço, quando disponíveis, normalizadas para a área cadastral analisada e trazidas ao período do FipeZAP.
 
-A fonte dos dados é o Portal de Dados Abertos da Prefeitura de Belo Horizonte.
+A estimativa central é a mediana das referências disponíveis. A ferramenta é estatística e não substitui laudo técnico de avaliação.
+
+## Atualização e integridade
+
+- A carga valida a presença dos campos mínimos esperados da PBH.
+- Linhas CSV malformadas provocam erro explícito; não são descartadas silenciosamente.
+- Cargas com volume ou qualidade incompatíveis com a base esperada são rejeitadas, preservando o banco anterior.
+- A substituição do banco e da série FipeZAP é feita por arquivo temporário e troca atômica.
+- A atualização manual força o novo download dos recursos, inclusive quando a PBH corrige um arquivo já publicado.
+
+## Fontes
+
+- Portal de Dados Abertos da Prefeitura de Belo Horizonte — ITBI Relatórios.
+- Fipe/FipeZAP — série histórica oficial do Índice FipeZAP residencial.
+
+## Limitação da hospedagem atual
+
+O Streamlit Community Cloud não garante persistência do armazenamento local. Se a instância for recriada, a base recente é recomposta automaticamente; a pesquisa histórica pode exigir nova carga do histórico completo desde 2008.

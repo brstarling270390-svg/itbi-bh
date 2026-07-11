@@ -3,10 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import shutil
 import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 from typing import Iterable
 
@@ -25,6 +25,9 @@ RAW_DIR = DATA_DIR / "raw"
 DB_PATH = DATA_DIR / "itbi_bh.duckdb"
 METADATA_PATH = DATA_DIR / "metadata.json"
 DEMO_PATH = DATA_DIR / "demo_itbi.csv"
+FIPEZAP_BH_PATH = DATA_DIR / "fipezap_bh.csv"
+FIPEZAP_SERIES_URL = "https://downloads.fipe.org.br/indices/fipezap/fipezap-serieshistoricas.xlsx"
+FIPEZAP_SOURCE_URL = "https://www.fipe.org.br/pt-br/indices/fipezap/"
 
 CANONICAL_COLUMNS = [
     "endereco",
@@ -42,6 +45,19 @@ CANONICAL_COLUMNS = [
     "zona_uso",
     "data_quitacao",
 ]
+
+# Campos mínimos necessários para que as consultas e avaliações sejam válidas.
+# Se a PBH alterar o esquema, a atualização falha de forma explícita em vez de
+# criar silenciosamente uma base com colunas vazias.
+REQUIRED_SOURCE_COLUMNS = {
+    "endereco",
+    "bairro",
+    "area_construida",
+    "tipo_construtivo",
+    "valor_declarado",
+    "valor_base_calculo",
+    "data_quitacao",
+}
 
 COLUMN_ALIASES = {
     "endereco": "endereco",
@@ -139,6 +155,20 @@ def _guess_csv_settings(path: Path) -> tuple[str, str]:
     first_line = text.splitlines()[0] if text.splitlines() else ""
     delimiter = ";" if first_line.count(";") >= first_line.count(",") else ","
     return selected, delimiter
+
+
+def validate_source_schema(columns: Iterable[object], resource: Resource) -> None:
+    recognized = {
+        canonical
+        for column in columns
+        if (canonical := _canonical_name(str(column))) is not None
+    }
+    missing = sorted(REQUIRED_SOURCE_COLUMNS - recognized)
+    if missing:
+        raise RuntimeError(
+            f"O arquivo {resource.name!r} não contém os campos mínimos esperados "
+            f"da base do ITBI: {', '.join(missing)}. A estrutura da PBH pode ter mudado."
+        )
 
 
 def normalize_chunk(chunk: pd.DataFrame, resource: Resource, row_offset: int = 0) -> pd.DataFrame:
@@ -259,6 +289,12 @@ def _safe_filename(resource: Resource) -> str:
     return f"{name}_{resource.resource_id[:8]}.csv"
 
 
+def _atomic_write_text(path: Path, content: str, encoding: str = "utf-8") -> None:
+    temp_path = path.with_suffix(path.suffix + ".tmp")
+    temp_path.write_text(content, encoding=encoding)
+    temp_path.replace(path)
+
+
 def download_resources(resources: Iterable[Resource], progress_callback=None, force: bool = False) -> list[Path]:
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     headers = {"User-Agent": "ITBI-BH-Consulta/1.0"}
@@ -321,7 +357,12 @@ def _create_schema(connection: duckdb.DuckDBPyConnection) -> None:
     )
 
 
-def build_database(resources: list[Resource], paths: list[Path], progress_callback=None) -> dict:
+def build_database(
+    resources: list[Resource],
+    paths: list[Path],
+    progress_callback=None,
+    minimum_records: int = 1000,
+) -> dict:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     temp_db = DB_PATH.with_suffix(".tmp.duckdb")
     for suffix in ["", ".wal"]:
@@ -346,11 +387,15 @@ def build_database(resources: list[Resource], paths: list[Path], progress_callba
                 dtype=str,
                 chunksize=50_000,
                 encoding=encoding,
-                on_bad_lines="skip",
+                on_bad_lines="error",
                 low_memory=False,
             )
             row_offset = 0
+            first_chunk = True
             for chunk in pd.read_csv(path, **read_kwargs):
+                if first_chunk:
+                    validate_source_schema(chunk.columns, resource)
+                    first_chunk = False
                 normalized = normalize_chunk(chunk, resource, row_offset=row_offset)
                 connection.register("incoming_chunk", normalized)
                 connection.execute("INSERT INTO transactions SELECT * FROM incoming_chunk")
@@ -370,17 +415,45 @@ def build_database(resources: list[Resource], paths: list[Path], progress_callba
                 COUNT(*) AS registros,
                 MIN(data_quitacao) AS data_inicial,
                 MAX(data_quitacao) AS data_final,
-                COUNT(DISTINCT bairro) AS bairros
+                COUNT(DISTINCT bairro) AS bairros,
+                COUNT(*) FILTER (WHERE data_quitacao IS NOT NULL) AS datas_validas,
+                COUNT(*) FILTER (WHERE endereco IS NOT NULL AND TRIM(endereco) <> '') AS enderecos_validos,
+                COUNT(*) FILTER (WHERE GREATEST(COALESCE(valor_declarado, 0), COALESCE(valor_base_calculo, 0)) > 0) AS valores_validos
             FROM transactions
             """
         ).fetchone()
+
+        record_count = int(stats[0] or 0)
+        if record_count < minimum_records:
+            raise RuntimeError(
+                f"A atualização produziu apenas {record_count} registros; o mínimo esperado para esta carga é {minimum_records}. "
+                "A carga foi rejeitada para evitar substituir a base por um conjunto incompleto."
+            )
+
+        quality_checks = {
+            "datas de quitação válidas": int(stats[4] or 0) / record_count,
+            "endereços válidos": int(stats[5] or 0) / record_count,
+            "valores de referência positivos": int(stats[6] or 0) / record_count,
+        }
+        failed = [
+            f"{name} ({ratio:.1%})"
+            for name, ratio in quality_checks.items()
+            if ratio < 0.50
+        ]
+        if failed:
+            raise RuntimeError(
+                "A qualidade da carga ficou abaixo do mínimo esperado: "
+                + "; ".join(failed)
+                + ". A base anterior foi preservada."
+            )
+
         connection.execute("CHECKPOINT")
     finally:
         connection.close()
 
-    if DB_PATH.exists():
-        DB_PATH.unlink()
-    shutil.move(str(temp_db), str(DB_PATH))
+    # Substituição atômica: reduz a janela em que outra sessão poderia encontrar
+    # o banco ausente durante uma atualização.
+    temp_db.replace(DB_PATH)
 
     metadata = {
         "dataset_id": DATASET_ID,
@@ -393,7 +466,10 @@ def build_database(resources: list[Resource], paths: list[Path], progress_callba
         "data_final": str(stats[2]) if stats[2] else None,
         "bairros": int(stats[3]),
     }
-    METADATA_PATH.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+    _atomic_write_text(
+        METADATA_PATH,
+        json.dumps(metadata, ensure_ascii=False, indent=2),
+    )
     return metadata
 
 
@@ -405,8 +481,195 @@ def update_from_pbh(progress_callback=None, force_download: bool = False, includ
     paths = download_resources(resources, progress_callback=progress_callback, force=force_download)
     metadata = build_database(resources, paths, progress_callback=progress_callback)
     metadata["escopo"] = "historico_completo" if include_historical else "base_recente"
-    METADATA_PATH.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+    _atomic_write_text(
+        METADATA_PATH,
+        json.dumps(metadata, ensure_ascii=False, indent=2),
+    )
     return metadata
+
+
+
+def parse_fipezap_bh_workbook(content: bytes) -> pd.DataFrame:
+    """Lê a série oficial FipeZAP de Belo Horizonte a partir da planilha da Fipe."""
+    raw = pd.read_excel(
+        BytesIO(content),
+        sheet_name="Belo Horizonte",
+        header=None,
+        usecols="A:C,R",
+        engine="openpyxl",
+    )
+    raw.columns = [
+        "ano_mes",
+        "data_excel",
+        "numero_indice",
+        "preco_m2",
+    ]
+
+    ano_mes = pd.to_numeric(raw["ano_mes"], errors="coerce")
+    numero_indice = pd.to_numeric(
+        raw["numero_indice"],
+        errors="coerce",
+    )
+    preco_m2 = pd.to_numeric(
+        raw["preco_m2"],
+        errors="coerce",
+    )
+
+    frame = pd.DataFrame(
+        {
+            "ano_mes": ano_mes,
+            "numero_indice": numero_indice,
+            "preco_m2": preco_m2,
+        }
+    )
+    frame = frame.dropna(
+        subset=["ano_mes", "numero_indice", "preco_m2"]
+    ).copy()
+    frame["ano_mes"] = frame["ano_mes"].astype(int)
+    frame = frame[
+        frame["ano_mes"].between(200001, 210012)
+    ].copy()
+
+    frame["data"] = pd.to_datetime(
+        frame["ano_mes"].astype(str),
+        format="%Y%m",
+        errors="coerce",
+    )
+    frame = frame.dropna(subset=["data"]).copy()
+    frame["fonte"] = "FipeZAP/Fipe"
+    frame["fonte_url"] = FIPEZAP_SOURCE_URL
+
+    return (
+        frame[
+            [
+                "data",
+                "numero_indice",
+                "preco_m2",
+                "fonte",
+                "fonte_url",
+            ]
+        ]
+        .sort_values("data")
+        .drop_duplicates("data", keep="last")
+        .reset_index(drop=True)
+    )
+
+
+def update_fipezap_bh(timeout: int = 120) -> pd.DataFrame:
+    """Baixa e atualiza a série FipeZAP de Belo Horizonte."""
+    headers = {"User-Agent": "Quanto-Vale-BH/1.0"}
+    response = requests.get(
+        FIPEZAP_SERIES_URL,
+        timeout=(20, timeout),
+        headers=headers,
+    )
+    response.raise_for_status()
+    frame = parse_fipezap_bh_workbook(response.content)
+    if frame.empty:
+        raise RuntimeError(
+            "A planilha da Fipe não retornou a série de Belo Horizonte."
+        )
+
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    temp_path = FIPEZAP_BH_PATH.with_suffix(".csv.tmp")
+    frame.to_csv(
+        temp_path,
+        index=False,
+        encoding="utf-8",
+    )
+    temp_path.replace(FIPEZAP_BH_PATH)
+    return frame
+
+
+def load_fipezap_bh_series() -> pd.DataFrame:
+    """Carrega a série FipeZAP empacotada; tenta atualizá-la se estiver ausente."""
+    if not FIPEZAP_BH_PATH.exists():
+        return update_fipezap_bh()
+
+    frame = pd.read_csv(
+        FIPEZAP_BH_PATH,
+        parse_dates=["data"],
+    )
+    frame["numero_indice"] = pd.to_numeric(
+        frame["numero_indice"],
+        errors="coerce",
+    )
+    frame["preco_m2"] = pd.to_numeric(
+        frame["preco_m2"],
+        errors="coerce",
+    )
+    return (
+        frame.dropna(
+            subset=["data", "numero_indice", "preco_m2"]
+        )
+        .sort_values("data")
+        .drop_duplicates("data", keep="last")
+        .reset_index(drop=True)
+    )
+
+
+def fipezap_factor(
+    start_date,
+    end_date=None,
+    series: pd.DataFrame | None = None,
+) -> dict | None:
+    """
+    Retorna o fator de evolução do número-índice FipeZAP/BH.
+
+    Usa o último mês disponível igual ou anterior ao mês solicitado.
+    Retorna None se a data inicial for anterior ao início da série.
+    """
+    frame = (
+        load_fipezap_bh_series()
+        if series is None
+        else series.copy()
+    )
+    if frame.empty:
+        return None
+
+    frame["data"] = pd.to_datetime(frame["data"])
+    frame = frame.sort_values("data").reset_index(drop=True)
+
+    start_month = pd.Timestamp(start_date).to_period("M").to_timestamp()
+    end_month = (
+        pd.Timestamp(end_date).to_period("M").to_timestamp()
+        if end_date is not None
+        else frame["data"].max()
+    )
+
+    min_date = frame["data"].min()
+    max_date = frame["data"].max()
+
+    if start_month < min_date or start_month > max_date:
+        return None
+    if end_month < start_month:
+        return None
+
+    start_rows = frame[frame["data"] <= start_month]
+    end_rows = frame[frame["data"] <= end_month]
+
+    if start_rows.empty or end_rows.empty:
+        return None
+
+    start_row = start_rows.iloc[-1]
+    end_row = end_rows.iloc[-1]
+
+    start_index = float(start_row["numero_indice"])
+    end_index = float(end_row["numero_indice"])
+
+    if start_index <= 0 or end_index <= 0:
+        return None
+
+    return {
+        "factor": end_index / start_index,
+        "growth_pct": (end_index / start_index - 1) * 100,
+        "start_date": pd.Timestamp(start_row["data"]),
+        "end_date": pd.Timestamp(end_row["data"]),
+        "start_index": start_index,
+        "end_index": end_index,
+        "start_price_m2": float(start_row["preco_m2"]),
+        "end_price_m2": float(end_row["preco_m2"]),
+    }
 
 
 def build_demo_database() -> dict:
@@ -418,7 +681,7 @@ def build_demo_database() -> dict:
         size=DEMO_PATH.stat().st_size if DEMO_PATH.exists() else None,
         hash_value=None,
     )
-    return build_database([demo_resource], [DEMO_PATH])
+    return build_database([demo_resource], [DEMO_PATH], minimum_records=1)
 
 
 def load_metadata() -> dict:
