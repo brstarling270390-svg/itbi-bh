@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import timedelta
+import html
+import re
 
 import pandas as pd
 import plotly.express as px
@@ -19,7 +21,7 @@ from data_manager import (
 
 st.set_page_config(
     page_title="Quanto Vale BH",
-    page_icon="🏠",
+    page_icon="🏙️",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -28,32 +30,35 @@ st.markdown(
     """
     <style>
     :root {
-        --qv-card: rgba(255,255,255,.035);
-        --qv-border: rgba(255,255,255,.10);
-        --qv-muted: rgba(255,255,255,.68);
+        --qv-blue: #2f6fed;
+        --qv-soft: rgba(127,127,127,.08);
+        --qv-border: rgba(127,127,127,.23);
+        --qv-muted: rgba(127,127,127,.90);
     }
 
     .block-container {
-        padding-top: 1.15rem;
+        padding-top: 1rem;
         padding-bottom: 3rem;
-        max-width: 1040px;
+        max-width: 1000px;
     }
 
     [data-testid="stHeader"] {background: transparent;}
+    #MainMenu, footer {visibility: hidden;}
+
     [data-testid="stMetric"] {
-        background: var(--qv-card);
+        background: var(--qv-soft);
         border: 1px solid var(--qv-border);
         border-radius: 16px;
         padding: .85rem 1rem;
     }
     [data-testid="stMetricLabel"] {opacity: .72;}
-    [data-testid="stMetricValue"] {font-size: 1.45rem;}
+    [data-testid="stMetricValue"] {font-size: 1.42rem;}
 
     div[data-testid="stForm"] {
         border: 1px solid var(--qv-border);
         border-radius: 18px;
         padding: 1rem 1.05rem .8rem;
-        background: var(--qv-card);
+        background: var(--qv-soft);
     }
 
     div[data-baseweb="select"] > div,
@@ -62,42 +67,69 @@ st.markdown(
         border-radius: 10px !important;
     }
 
-    .brand {
-        padding: .2rem 0 .35rem;
+    [data-testid="stBaseButton-primary"] {
+        background: var(--qv-blue) !important;
+        border-color: var(--qv-blue) !important;
+        color: #fff !important;
+        font-weight: 700 !important;
     }
+    [data-testid="stBaseButton-primary"]:hover {
+        filter: brightness(1.05);
+    }
+
+    div[data-testid="stSegmentedControl"] button {
+        min-height: 2.65rem;
+        border-radius: 10px !important;
+        font-weight: 650;
+    }
+    div[data-testid="stSegmentedControl"] button[aria-pressed="true"] {
+        color: var(--qv-blue) !important;
+        border-color: var(--qv-blue) !important;
+    }
+
+    .brand {padding: .2rem 0 .35rem;}
     .brand-name {
-        font-size: .88rem;
+        color: var(--qv-blue);
+        font-size: .86rem;
         font-weight: 800;
-        letter-spacing: .08em;
+        letter-spacing: .09em;
         text-transform: uppercase;
-        opacity: .76;
-        margin-bottom: .35rem;
+        margin-bottom: .4rem;
     }
     .brand-title {
-        font-size: 2.25rem;
+        font-size: 2.15rem;
         font-weight: 800;
-        line-height: 1.08;
+        line-height: 1.1;
         margin: 0;
+        max-width: 820px;
     }
     .brand-subtitle {
-        color: var(--qv-muted);
-        font-size: 1rem;
+        opacity: .72;
+        font-size: .98rem;
         margin-top: .55rem;
         max-width: 760px;
     }
 
     .section-intro {
-        color: var(--qv-muted);
+        opacity: .70;
         margin-top: -.35rem;
         margin-bottom: 1rem;
     }
 
+    .data-note {
+        border-left: 3px solid var(--qv-blue);
+        padding: .1rem 0 .1rem .8rem;
+        opacity: .72;
+        font-size: .86rem;
+        margin: .8rem 0 1.2rem;
+    }
+
     .result-box {
         padding: 1.25rem 1.3rem;
-        border: 1px solid rgba(255,255,255,.13);
+        border: 1px solid var(--qv-border);
         border-radius: 18px;
         margin: .5rem 0 1rem;
-        background: linear-gradient(135deg, rgba(255,255,255,.055), rgba(255,255,255,.022));
+        background: var(--qv-soft);
     }
     .result-title {
         font-size: .86rem;
@@ -115,27 +147,37 @@ st.markdown(
         margin-top: .35rem;
     }
 
-    div[data-testid="stSegmentedControl"] button {
-        min-height: 2.7rem;
-        border-radius: 10px !important;
-        font-weight: 650;
+    .address-title {
+        font-size: 1rem;
+        font-weight: 760;
+        line-height: 1.35;
+        margin-bottom: .28rem;
     }
-
-    .data-note {
-        border-left: 3px solid rgba(255,255,255,.28);
-        padding: .15rem 0 .15rem .85rem;
-        color: var(--qv-muted);
-        font-size: .88rem;
-        margin: .8rem 0 1.1rem;
+    .address-meta {
+        opacity: .66;
+        font-size: .86rem;
+        margin-bottom: .85rem;
+    }
+    .record-detail {
+        opacity: .68;
+        font-size: .85rem;
+        margin-top: .2rem;
+    }
+    .footer-note {
+        border-top: 1px solid var(--qv-border);
+        margin-top: 2rem;
+        padding-top: 1rem;
+        opacity: .62;
+        font-size: .82rem;
     }
 
     @media (max-width: 768px) {
-        .block-container {padding: .8rem .75rem 2.2rem;}
-        .brand-title {font-size: 1.85rem;}
-        .brand-subtitle {font-size: .92rem;}
-        h2 {font-size: 1.35rem !important;}
-        h3 {font-size: 1.18rem !important;}
-        [data-testid="stMetricValue"] {font-size: 1.2rem;}
+        .block-container {padding: .75rem .7rem 2.2rem;}
+        .brand-title {font-size: 1.72rem;}
+        .brand-subtitle {font-size: .9rem;}
+        h2 {font-size: 1.32rem !important;}
+        h3 {font-size: 1.15rem !important;}
+        [data-testid="stMetricValue"] {font-size: 1.18rem;}
         [data-testid="stHorizontalBlock"] {flex-wrap: wrap;}
         [data-testid="column"] {
             min-width: 100% !important;
@@ -143,13 +185,15 @@ st.markdown(
             flex: 1 1 100% !important;
         }
         button {min-height: 2.9rem;}
-        .result-value {font-size: 1.65rem;}
+        .result-value {font-size: 1.55rem;}
         div[data-testid="stSegmentedControl"] {
             overflow-x: auto;
             padding-bottom: .15rem;
         }
         div[data-testid="stSegmentedControl"] button {
             white-space: nowrap;
+            padding-left: .7rem !important;
+            padding-right: .7rem !important;
         }
     }
     </style>
@@ -169,6 +213,73 @@ def number_br(value: float | int | None, decimals: int = 0) -> str:
     if value is None or pd.isna(value):
         return "—"
     return f"{float(value):,.{decimals}f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+MONTHS_PT = (
+    "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+    "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
+)
+
+
+def data_limit_label(value: object) -> str:
+    if value is None or value == "":
+        return "data não informada"
+    try:
+        date = pd.to_datetime(value)
+        return f"{MONTHS_PT[date.month - 1]} de {date.year}"
+    except Exception:  # noqa: BLE001
+        return str(value)
+
+
+def smart_title(value: object) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    words = str(value).strip().lower().split()
+    lowers = {"da", "das", "de", "do", "dos", "e"}
+    pretty = [word if i > 0 and word in lowers else word.capitalize() for i, word in enumerate(words)]
+    return " ".join(pretty)
+
+
+def text_or_na(value: object, fallback: str = "não informado") -> str:
+    if value is None or pd.isna(value) or str(value).strip() == "":
+        return fallback
+    return str(value)
+
+
+def short_address(endereco: object, bairro: object = None) -> str:
+    raw = "" if endereco is None or pd.isna(endereco) else str(endereco).strip()
+    bairro_norm = normalize_text("" if bairro is None or pd.isna(bairro) else str(bairro))
+    parts: list[str] = []
+    for part in re.split(r"\s+-\s+", raw):
+        clean = part.strip()
+        normalized = normalize_text(clean)
+        if not clean:
+            continue
+        if normalized in {bairro_norm, "belo horizonte", "mg"}:
+            continue
+        if re.fullmatch(r"\d{5}-?\d{3}", clean):
+            continue
+        parts.append(clean)
+
+    if not parts:
+        return smart_title(raw)
+
+    first = smart_title(parts[0])
+    first = re.sub(r"\s+(\d+[A-Za-z]?)$", r", \1", first)
+    remaining = [smart_title(part) for part in parts[1:]]
+    return " · ".join([first, *remaining])
+
+
+def address_header(endereco: object, bairro: object, date_value: object, kind: object) -> None:
+    title = html.escape(short_address(endereco, bairro))
+    neighborhood = html.escape(smart_title(bairro))
+    date_text = pd.to_datetime(date_value).strftime("%d/%m/%Y")
+    kind_text = html.escape(str(kind) if kind is not None and not pd.isna(kind) else "Imóvel")
+    st.markdown(
+        f'<div class="address-title">{title}</div>'
+        f'<div class="address-meta">{neighborhood} · {date_text} · {kind_text}</div>',
+        unsafe_allow_html=True,
+    )
 
 
 def run_update(force: bool = False, include_historical: bool = False) -> None:
@@ -401,9 +512,9 @@ st.markdown(
     """
     <div class="brand">
       <div class="brand-name">Quanto Vale BH</div>
-      <div class="brand-title">Imóveis de Belo Horizonte, com dados reais de transações.</div>
+      <div class="brand-title">Consulte transações imobiliárias declaradas em Belo Horizonte.</div>
       <div class="brand-subtitle">
-        Consulte negócios registrados, encontre imóveis comparáveis e acompanhe valores por metro quadrado usando dados públicos da Prefeitura de Belo Horizonte.
+        Pesquise por rua ou bairro, encontre imóveis comparáveis e acompanhe valores por m² com dados públicos da PBH.
       </div>
     </div>
     """,
@@ -411,18 +522,8 @@ st.markdown(
 )
 
 if not database_exists():
-    st.info("Na primeira utilização, prepare a base recente da PBH.")
-    if st.button("Preparar base recente", type="primary", width="stretch"):
-        run_update(include_historical=False)
-    with st.expander("Outras opções"):
-        if st.button("Preparar histórico completo desde 2008", width="stretch"):
-            run_update(include_historical=True)
-        if st.button("Abrir demonstração", width="stretch"):
-            try:
-                build_demo_database()
-                st.rerun()
-            except Exception as exc:  # noqa: BLE001
-                st.error(f"Não foi possível preparar a demonstração: {exc}")
+    st.info("Preparando os dados públicos da PBH. Na primeira abertura, isso pode levar alguns instantes.")
+    run_update(include_historical=False)
     st.stop()
 
 metadata = load_metadata()
@@ -430,16 +531,16 @@ dimensions = get_dimensions(DB_PATH.stat().st_mtime)
 
 screen = st.segmented_control(
     "Navegação",
-    ["Avaliar imóvel", "Explorar transações", "Mercado", "Dados"],
-    default="Avaliar imóvel",
+    ["Avaliar", "Transações", "Mercado", "Sobre"],
+    default="Avaliar",
     label_visibility="collapsed",
 )
 st.markdown(
-    f'<div class="data-note">Base pública da PBH · {number_br(metadata.get("registros", metadata.get("registros_unicos")))} registros disponíveis · dados até {metadata.get("data_final") or "—"}</div>',
+    f'<div class="data-note">Base pública da PBH · {number_br(metadata.get("registros", metadata.get("registros_unicos")))} transações disponíveis · atualizada até {data_limit_label(metadata.get("data_final"))}</div>',
     unsafe_allow_html=True,
 )
 
-if screen == "Avaliar imóvel":
+if screen == "Avaliar":
     st.subheader("Avaliar um imóvel")
     st.markdown('<div class="section-intro">Informe as características principais. O app busca transações semelhantes e apresenta uma faixa de referência.</div>', unsafe_allow_html=True)
     with st.form("avaliacao"):
@@ -453,14 +554,13 @@ if screen == "Avaliar imóvel":
         )
         area = st.number_input("Área do imóvel (m²)", min_value=10.0, max_value=10000.0, value=90.0, step=5.0)
         padrao = st.selectbox(
-            "Padrão de acabamento",
+            "Padrão de acabamento (opcional)",
             dimensions["padroes"],
             index=None,
             placeholder="Selecione, se souber",
             help="Quando informado, o app prioriza transações do mesmo padrão de acabamento. Isso tende a melhorar a comparabilidade.",
         )
-        st.caption("O padrão de acabamento é usado como critério relevante na seleção dos comparáveis.")
-        with st.expander("Informações adicionais"):
+        with st.expander("Ano de construção (opcional)"):
             current_year = pd.Timestamp.today().year
             ano_known = st.checkbox("Informar ano de construção")
             ano = st.number_input("Ano de construção", min_value=1800, max_value=current_year, value=2000, step=1, disabled=not ano_known)
@@ -513,27 +613,33 @@ if screen == "Avaliar imóvel":
                 st.info(f"Os comparáveis usados nesta estimativa são do mesmo padrão de acabamento ({subject['padrao']}).")
             else:
                 st.info(f"O padrão {subject['padrao']} foi priorizado, mas a amostra precisou ser ampliada para padrões diferentes por falta de registros suficientes.")
-        st.warning("É uma referência estatística baseada em dados declarados ao ITBI. Não é laudo de avaliação nem preço de anúncio.")
+        st.caption("Referência estatística baseada em valores declarados ao ITBI. Não substitui laudo técnico de avaliação.")
+
+        with st.expander("Como a faixa de referência é calculada?"):
+            st.write("O app seleciona transações do mesmo bairro e tipo de imóvel, prioriza áreas semelhantes, recência, ano de construção e padrão de acabamento quando informado. A faixa usa o intervalo central dos valores por m² dos comparáveis, reduzindo o peso de valores extremos.")
 
         st.subheader("Imóveis usados como referência")
         for _, row in comparables.head(10).iterrows():
             with st.container(border=True):
-                st.markdown(f"**{row['endereco']}**")
-                st.caption(
-                    f"{pd.to_datetime(row['data_quitacao']).strftime('%d/%m/%Y')} · "
-                    f"{number_br(row['area_construida'], 1)} m² · "
-                    f"{TYPE_LABELS.get(row['tipo_construtivo'], row['tipo_descricao'])} · "
-                    f"Padrão {row['padrao_acabamento'] or 'não informado'}"
+                address_header(
+                    row["endereco"],
+                    row["bairro"],
+                    row["data_quitacao"],
+                    TYPE_LABELS.get(row["tipo_construtivo"], row["tipo_descricao"]),
+                )
+                st.markdown(
+                    f'<div class="record-detail">{number_br(row["area_construida"], 1)} m² · Padrão {html.escape(text_or_na(row["padrao_acabamento"]))}</div>',
+                    unsafe_allow_html=True,
                 )
                 c1, c2 = st.columns(2)
                 c1.metric("Valor declarado", brl(row["valor_declarado"]))
                 c2.metric("Valor por m²", brl(row["valor_m2_declarado"], 2))
 
-elif screen == "Explorar transações":
-    st.subheader("Encontrar transações")
-    st.markdown('<div class="section-intro">Pesquise por rua, endereço ou bairro e refine pelos filtros disponíveis.</div>', unsafe_allow_html=True)
+elif screen == "Transações":
+    st.subheader("Pesquisar transações")
+    st.markdown('<div class="section-intro">Digite uma rua, um endereço ou um bairro e refine a busca com os filtros abaixo.</div>', unsafe_allow_html=True)
     with st.form("consulta"):
-        text = st.text_input("Rua, endereço ou bairro", placeholder="Ex.: Rua Alcântara 399")
+        text = st.text_input("Rua, endereço ou bairro", placeholder="Ex.: Rua Campos Elíseos ou Nova Granada")
         bairros = st.multiselect("Bairro", dimensions["bairros"], placeholder="Todos os bairros")
         tipos = st.multiselect(
             "Tipo de imóvel",
@@ -542,7 +648,7 @@ elif screen == "Explorar transações":
             placeholder="Todos os tipos",
         )
         padroes = st.multiselect(
-            "Padrão de acabamento",
+            "Padrão de acabamento (opcional)",
             dimensions["padroes"],
             placeholder="Todos os padrões",
         )
@@ -557,31 +663,34 @@ elif screen == "Explorar transações":
     date_start, date_end = dates if isinstance(dates, tuple) and len(dates) == 2 else (dates, dates)
     result, stats = query_transactions(text, bairros, tipos, padroes, date_start, date_end)
     c1, c2, c3 = st.columns(3)
-    c1.metric("Negócios encontrados", number_br(stats["records"]))
+    c1.metric("Transações encontradas", number_br(stats["records"]))
     c2.metric("Mediana do valor", brl(stats["median_value"]))
     c3.metric("Mediana por m²", brl(stats["median_m2"], 2))
     if result.empty:
-        st.info("Nenhuma transação encontrada.")
+        st.info("Nenhuma transação encontrada para esses filtros.")
     else:
+        shown = min(len(result), 30)
+        if stats["records"] > shown:
+            st.caption(f"Exibindo as {shown} transações mais recentes de {number_br(stats['records'])} encontradas.")
         for _, row in result.head(30).iterrows():
             with st.container(border=True):
-                st.markdown(f"**{row['endereco']}**")
-                st.caption(f"{row['bairro']} · {pd.to_datetime(row['data_quitacao']).strftime('%d/%m/%Y')} · {row['tipo_descricao']}")
+                address_header(row["endereco"], row["bairro"], row["data_quitacao"], row["tipo_descricao"])
                 c1, c2 = st.columns(2)
                 c1.metric("Valor declarado", brl(row["valor_declarado"]))
                 c2.metric("Valor por m²", brl(row["valor_m2_declarado"], 2))
-                st.caption(
-                    f"Área: {number_br(row['area_construida'], 2)} m² · "
-                    f"Padrão: {row['padrao_acabamento'] or 'não informado'} · "
-                    f"Ano: {number_br(row['ano_construcao']) if pd.notna(row['ano_construcao']) else 'não informado'} · "
-                    f"Base de cálculo: {brl(row['valor_base_calculo'])}"
+                st.markdown(
+                    f'<div class="record-detail">Área: {number_br(row["area_construida"], 2)} m² · '
+                    f'Padrão: {html.escape(text_or_na(row["padrao_acabamento"]))} · '
+                    f'Ano: {number_br(row["ano_construcao"]) if pd.notna(row["ano_construcao"]) else "não informado"} · '
+                    f'Base de cálculo: {brl(row["valor_base_calculo"])}</div>',
+                    unsafe_allow_html=True,
                 )
         csv = result.to_csv(index=False, sep=";", decimal=",", encoding="utf-8-sig")
-        st.download_button("Baixar resultados em CSV", csv, "transacoes_itbi_bh.csv", "text/csv", width="stretch")
+        st.download_button("Baixar até 300 resultados em CSV", csv, "transacoes_itbi_bh.csv", "text/csv", width="stretch")
 
 elif screen == "Mercado":
     st.subheader("Acompanhar o mercado")
-    st.markdown('<div class="section-intro">Veja a evolução mensal do valor mediano por metro quadrado e do número de transações.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-intro">Acompanhe a evolução mensal do valor mediano por m² e do volume de transações declaradas.</div>', unsafe_allow_html=True)
     bairro_market = st.selectbox("Bairro", [None] + dimensions["bairros"], format_func=lambda x: "Todos os bairros" if x is None else x)
     tipo_market = st.selectbox(
         "Tipo de imóvel",
@@ -596,31 +705,39 @@ elif screen == "Mercado":
         fig = px.line(series, x="mes", y="mediana_m2", markers=True, labels={"mes": "Mês", "mediana_m2": "Mediana por m²"})
         fig.update_layout(yaxis_tickprefix="R$ ", hovermode="x unified", margin=dict(l=10, r=10, t=20, b=10))
         st.plotly_chart(fig, width="stretch")
-        fig2 = px.bar(series, x="mes", y="transacoes", labels={"mes": "Mês", "transacoes": "Negócios encontrados"})
+        fig2 = px.bar(series, x="mes", y="transacoes", labels={"mes": "Mês", "transacoes": "Transações"})
         fig2.update_layout(margin=dict(l=10, r=10, t=20, b=10))
         st.plotly_chart(fig2, width="stretch")
+        st.caption("Os gráficos usam medianas para reduzir a influência de valores extremos.")
 
 else:
     st.subheader("Sobre os dados")
-    st.markdown('<div class="section-intro">Confira o período disponível e atualize a base quando a PBH publicar novos arquivos.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-intro">Entenda a origem e a leitura das informações apresentadas no aplicativo.</div>', unsafe_allow_html=True)
     c1, c2 = st.columns(2)
-    c1.metric("Registros", number_br(metadata.get("registros", metadata.get("registros_unicos"))))
-    c2.metric("Dados até", metadata.get("data_final") or "—")
-    st.caption(f"Escopo: {metadata.get('escopo', 'não informado').replace('_', ' ')}")
-    if st.button("Atualizar dados da PBH", type="primary", width="stretch"):
-        run_update(include_historical=metadata.get("escopo") == "historico_completo")
-    with st.expander("Trocar escopo da base"):
-        if st.button("Usar base recente", width="stretch"):
-            run_update(include_historical=False)
-        if st.button("Usar histórico completo", width="stretch"):
-            run_update(include_historical=True)
+    c1.metric("Transações na base", number_br(metadata.get("registros", metadata.get("registros_unicos"))))
+    c2.metric("Atualizada até", data_limit_label(metadata.get("data_final")))
     st.markdown(
         """
-        **Como ler os valores:** o **valor declarado** corresponde ao valor da aquisição informado pelo contribuinte. A **base de cálculo** é o valor considerado para tributação pela administração municipal. A base pública não informa, em campo próprio, o valor individual efetivamente recolhido de ITBI.
+        Os dados vêm do **Portal de Dados Abertos da Prefeitura de Belo Horizonte**.
 
-        Este aplicativo é uma ferramenta de consulta e referência. As estimativas não substituem laudo técnico de avaliação.
+        **Valor declarado** é o valor da aquisição informado pelo contribuinte. **Base de cálculo** é o valor considerado para tributação pela administração municipal. A base pública não apresenta um campo individual com o valor efetivamente recolhido de ITBI.
 
-        **No iPhone:** abra no Safari, toque em **Compartilhar** e selecione **Adicionar à Tela de Início**.
+        A avaliação apresentada no app é uma **referência estatística** baseada em transações comparáveis. Ela não substitui laudo técnico de avaliação.
         """
     )
-    st.link_button("Fonte oficial da PBH", "https://dados.pbh.gov.br/dataset/itbi-relatorios", width="stretch")
+    st.link_button("Abrir a fonte oficial da PBH", "https://dados.pbh.gov.br/dataset/itbi-relatorios", width="stretch")
+    with st.expander("Atualização da base"):
+        st.caption("Use esta opção quando a PBH publicar novos arquivos mensais.")
+        if st.button("Verificar e atualizar dados", type="primary", width="stretch"):
+            run_update(include_historical=False)
+    st.markdown(
+        """
+        **No iPhone:** abra o app no Safari, toque em **Compartilhar** e selecione **Adicionar à Tela de Início**.
+        """
+    )
+
+
+st.markdown(
+    '<div class="footer-note">Quanto Vale BH · consulta independente baseada em dados públicos da Prefeitura de Belo Horizonte.</div>',
+    unsafe_allow_html=True,
+)
