@@ -1,21 +1,24 @@
-# ITBI BH — versão celular
+# Quanto Vale BH — v3
 
-Aplicativo Streamlit para pesquisar transações imobiliárias declaradas à Prefeitura de Belo Horizonte.
+Aplicativo Streamlit para transformar os dados públicos de ITBI da Prefeitura de Belo Horizonte em uma experiência orientada à pergunta: **quanto vale um imóvel parecido com este?**
 
-## Melhorias desta versão
+## Fluxo principal
 
-- interface adaptada para telas pequenas;
-- filtros na tela principal, sem depender da barra lateral;
-- resultados em cartões;
-- navegação por uma lista simples;
-- base recente como padrão, reduzindo o volume de download;
-- opção de histórico completo desde 2008;
-- instruções para adicionar o endereço à tela inicial do iPhone.
+1. Informe bairro, tipo de imóvel e área.
+2. Opcionalmente informe ano de construção e padrão de acabamento.
+3. O app seleciona transações comparáveis em camadas de recência e tolerância de área.
+4. Exibe faixa observada, referência central, mediana por m² e as transações mais semelhantes.
 
-## Execução local
+A faixa é uma referência estatística baseada em valores declarados ao ITBI. Não constitui laudo de avaliação.
 
-No Windows, dê dois cliques em `INICIAR_APP_WINDOWS.bat`.
+## Publicar atualização
 
-## Publicação
+Substitua o conteúdo do repositório no GitHub pelos arquivos desta versão ou, no GitHub, use **Add file → Upload files**, envie os arquivos e confirme em **Commit changes**. O Streamlit Community Cloud normalmente refaz o deploy automaticamente após o commit.
 
-Consulte `GUIA_PUBLICAR_NO_CELULAR.md`.
+## Versão 4
+
+- Mantém a área de exploração das transações como navegação própria.
+- Torna o padrão de acabamento um critério visível na avaliação.
+- Prioriza comparáveis do mesmo padrão antes de ampliar a amostra.
+- Exibe o padrão de acabamento nos cartões de transações.
+- Permite filtrar a consulta por padrão de acabamento.
