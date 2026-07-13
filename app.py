@@ -10,6 +10,13 @@ import plotly.express as px
 import streamlit as st
 import streamlit.components.v1 as components
 
+from app_logic import (
+    comparable_source_exclusions,
+    consume_hybrid_scroll,
+    evaluate_selected_transaction,
+    exclude_source_rows,
+    store_hybrid_result,
+)
 from data_manager import (
     DB_PATH,
     FIPEZAP_BH_PATH,
@@ -454,6 +461,7 @@ def valuation_query(
     rua: str | None,
     end_date,
     exclude_registro_id: str | None = None,
+    exclude_chave_tecnica: str | None = None,
 ) -> tuple[pd.DataFrame, dict]:
     """
     Busca comparáveis atuais em camadas.
@@ -509,9 +517,12 @@ def valuation_query(
                 area_max,
             ]
 
-            if exclude_registro_id:
-                where.append("registro_id <> ?")
-                params.append(str(exclude_registro_id))
+            exclusion_clauses, exclusion_params = comparable_source_exclusions(
+                exclude_registro_id,
+                exclude_chave_tecnica,
+            )
+            where.extend(exclusion_clauses)
+            params.extend(exclusion_params)
 
             if padrao and strict_pattern:
                 where.append("padrao_acabamento = ?")
@@ -523,7 +534,7 @@ def valuation_query(
 
             frame = con.execute(
                 f"""
-                SELECT registro_id, data_quitacao, endereco, endereco_busca, bairro,
+                SELECT registro_id, chave_tecnica, data_quitacao, endereco, endereco_busca, bairro,
                        tipo_construtivo, tipo_descricao, ano_construcao,
                        area_construida, padrao_acabamento, valor_declarado,
                        valor_base_calculo,
@@ -745,7 +756,7 @@ def query_transactions(
 
         frame = con.execute(
             f"""
-            SELECT registro_id, data_quitacao, endereco, endereco_busca, bairro,
+            SELECT registro_id, chave_tecnica, data_quitacao, endereco, endereco_busca, bairro,
                    tipo_construtivo, tipo_descricao, ano_construcao,
                    area_construida, area_somada, fracao_ideal,
                    padrao_acabamento, valor_declarado, valor_base_calculo,
@@ -801,7 +812,7 @@ def search_transactions_for_valuation(
     with connect_read_only() as con:
         return con.execute(
             f"""
-            SELECT registro_id, data_quitacao, endereco, endereco_busca, bairro,
+            SELECT registro_id, chave_tecnica, data_quitacao, endereco, endereco_busca, bairro,
                    tipo_construtivo, tipo_descricao, ano_construcao,
                    area_construida, area_somada, fracao_ideal,
                    padrao_acabamento, valor_declarado, valor_base_calculo,
@@ -827,7 +838,7 @@ def query_same_building(
     with connect_read_only() as con:
         return con.execute(
             f"""
-            SELECT registro_id, data_quitacao, endereco, endereco_busca, bairro,
+            SELECT registro_id, chave_tecnica, data_quitacao, endereco, endereco_busca, bairro,
                    tipo_construtivo, tipo_descricao, ano_construcao,
                    area_construida, area_somada, fracao_ideal,
                    padrao_acabamento, valor_declarado, valor_base_calculo,
@@ -855,6 +866,7 @@ def hybrid_value_update_query(
     end_date,
     source_address: str | None = None,
     source_registro_id: str | None = None,
+    source_chave_tecnica: str | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     """
     Combina referências complementares para atualizar um valor antigo.
@@ -904,6 +916,7 @@ def hybrid_value_update_query(
         rua=rua,
         end_date=end_date,
         exclude_registro_id=source_registro_id,
+        exclude_chave_tecnica=source_chave_tecnica,
     )
 
     if local_stats:
@@ -939,11 +952,11 @@ def hybrid_value_update_query(
                 & building_rows["valor_m2_referencia"].gt(0)
             ].copy()
 
-            if source_registro_id:
-                building_rows = building_rows[
-                    building_rows["registro_id"].astype(str)
-                    != str(source_registro_id)
-                ].copy()
+            building_rows = exclude_source_rows(
+                building_rows,
+                source_registro_id,
+                source_chave_tecnica,
+            )
 
             indexed_values = []
             fipe_latest = pd.Timestamp(fipe_series["data"].max())
@@ -1526,7 +1539,9 @@ if screen == "Avaliar":
                             width="stretch",
                         ):
                             local_rows, building_rows, hybrid_stats = (
-                                hybrid_value_update_query(
+                                evaluate_selected_transaction(
+                                    hybrid_value_update_query,
+                                    row,
                                     old_value=float(row["valor_referencia"]),
                                     purchase_date=row["data_quitacao"],
                                     bairro=row["bairro"],
@@ -1545,7 +1560,6 @@ if screen == "Avaliar":
                                     rua=street_from_address(row["endereco"]),
                                     end_date=dimensions["max_date"],
                                     source_address=row["endereco"],
-                                    source_registro_id=row["registro_id"],
                                 )
                             )
 
@@ -1554,30 +1568,32 @@ if screen == "Avaliar":
                                     "Não foi possível formar referências suficientes para este imóvel."
                                 )
                             else:
-                                st.session_state["hybrid_local"] = local_rows
-                                st.session_state["hybrid_building"] = building_rows
-                                st.session_state["hybrid_stats"] = hybrid_stats
-                                st.session_state["hybrid_subject"] = {
-                                    "old_value": float(row["valor_referencia"]),
-                                    "purchase_date": row["data_quitacao"],
-                                    "bairro": row["bairro"],
-                                    "rua": street_from_address(row["endereco"]),
-                                    "tipo": row["tipo_construtivo"],
-                                    "area": float(row["area_construida"]),
-                                    "padrao": (
-                                        row["padrao_acabamento"]
-                                        if pd.notna(row["padrao_acabamento"])
-                                        else None
-                                    ),
-                                    "ano": (
-                                        int(row["ano_construcao"])
-                                        if pd.notna(row["ano_construcao"])
-                                        else None
-                                    ),
-                                    "source_transaction": True,
-                                    "source_address": row["endereco"],
-                                }
-                                st.session_state["_scroll_hybrid_result"] = True
+                                store_hybrid_result(
+                                    st.session_state,
+                                    local_rows=local_rows,
+                                    building_rows=building_rows,
+                                    stats=hybrid_stats,
+                                    subject={
+                                        "old_value": float(row["valor_referencia"]),
+                                        "purchase_date": row["data_quitacao"],
+                                        "bairro": row["bairro"],
+                                        "rua": street_from_address(row["endereco"]),
+                                        "tipo": row["tipo_construtivo"],
+                                        "area": float(row["area_construida"]),
+                                        "padrao": (
+                                            row["padrao_acabamento"]
+                                            if pd.notna(row["padrao_acabamento"])
+                                            else None
+                                        ),
+                                        "ano": (
+                                            int(row["ano_construcao"])
+                                            if pd.notna(row["ano_construcao"])
+                                            else None
+                                        ),
+                                        "source_transaction": True,
+                                        "source_address": row["endereco"],
+                                    },
+                                )
                                 st.rerun()
 
         else:
@@ -1704,35 +1720,38 @@ if screen == "Avaliar":
                             "Não foi possível formar referências suficientes para essa combinação."
                         )
                     else:
-                        st.session_state["hybrid_local"] = local_rows
-                        st.session_state["hybrid_building"] = building_rows
-                        st.session_state["hybrid_stats"] = hybrid_stats
-                        st.session_state["hybrid_subject"] = {
-                            "old_value": float(old_value),
-                            "purchase_date": purchase_date,
-                            "bairro": bairro_old,
-                            "rua": (
-                                rua_old.strip()
-                                if rua_old
-                                else None
-                            ),
-                            "tipo": tipo_old,
-                            "area": float(area_old),
-                            "padrao": padrao_old,
-                            "ano": (
-                                int(ano_old)
-                                if ano_old is not None
-                                else None
-                            ),
-                            "source_transaction": False,
-                        }
+                        store_hybrid_result(
+                            st.session_state,
+                            local_rows=local_rows,
+                            building_rows=building_rows,
+                            stats=hybrid_stats,
+                            subject={
+                                "old_value": float(old_value),
+                                "purchase_date": purchase_date,
+                                "bairro": bairro_old,
+                                "rua": (
+                                    rua_old.strip()
+                                    if rua_old
+                                    else None
+                                ),
+                                "tipo": tipo_old,
+                                "area": float(area_old),
+                                "padrao": padrao_old,
+                                "ano": (
+                                    int(ano_old)
+                                    if ano_old is not None
+                                    else None
+                                ),
+                                "source_transaction": False,
+                            },
+                        )
 
         if "hybrid_stats" in st.session_state:
             st.markdown(
                 '<div id="hybrid-result-anchor"></div>',
                 unsafe_allow_html=True,
             )
-            if st.session_state.pop("_scroll_hybrid_result", False):
+            if consume_hybrid_scroll(st.session_state):
                 scroll_to_result("hybrid-result-anchor")
 
             stats = st.session_state["hybrid_stats"]
@@ -2105,6 +2124,8 @@ elif screen == "Transações":
                             ),
                             rua=street_from_address(row["endereco"]),
                             end_date=dimensions["max_date"],
+                            exclude_registro_id=row["registro_id"],
+                            exclude_chave_tecnica=row["chave_tecnica"],
                         )
 
                         if comparables.empty:
