@@ -4,7 +4,8 @@ from collections.abc import Callable, MutableMapping
 from typing import Any
 
 
-HYBRID_SCROLL_FLAG = "_scroll_hybrid_result"
+HYBRID_SCROLL_SEQUENCE = "_hybrid_scroll_sequence"
+HYBRID_SCROLL_PENDING = "_hybrid_scroll_pending"
 
 
 def comparable_source_exclusions(
@@ -66,6 +67,14 @@ def exclude_source_rows(
     return filtered.copy()
 
 
+def next_hybrid_scroll_token(state: MutableMapping[str, Any]) -> int:
+    """Gera um token crescente para forçar uma nova rolagem a cada cálculo."""
+    token = int(state.get(HYBRID_SCROLL_SEQUENCE, 0)) + 1
+    state[HYBRID_SCROLL_SEQUENCE] = token
+    state[HYBRID_SCROLL_PENDING] = token
+    return token
+
+
 def store_hybrid_result(
     state: MutableMapping[str, Any],
     *,
@@ -73,15 +82,16 @@ def store_hybrid_result(
     building_rows: Any,
     stats: dict,
     subject: dict,
-) -> None:
-    """Armazena um cálculo híbrido concluído e solicita uma única rolagem."""
+) -> int:
+    """Armazena um cálculo híbrido concluído e cria uma nova solicitação de rolagem."""
     state["hybrid_local"] = local_rows
     state["hybrid_building"] = building_rows
     state["hybrid_stats"] = stats
     state["hybrid_subject"] = subject
-    state[HYBRID_SCROLL_FLAG] = True
+    return next_hybrid_scroll_token(state)
 
 
-def consume_hybrid_scroll(state: MutableMapping[str, Any]) -> bool:
-    """Consome a solicitação de rolagem; reruns posteriores retornam False."""
-    return bool(state.pop(HYBRID_SCROLL_FLAG, False))
+def consume_hybrid_scroll(state: MutableMapping[str, Any]) -> int | None:
+    """Consome o token pendente; cada novo cálculo recebe um token diferente."""
+    token = state.pop(HYBRID_SCROLL_PENDING, None)
+    return int(token) if token is not None else None

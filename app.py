@@ -8,18 +8,27 @@ import re
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-import streamlit.components.v1 as components
 
 from app_logic import (
+    HYBRID_SCROLL_SEQUENCE,
     comparable_source_exclusions,
     consume_hybrid_scroll,
     evaluate_selected_transaction,
     exclude_source_rows,
     store_hybrid_result,
 )
+from market_logic import (
+    MIN_RADAR_TRANSACTIONS,
+    eligible_neighborhoods,
+    market_reading,
+    market_scope_stats,
+    monthly_market_series,
+    neighborhood_snapshot,
+    price_distribution,
+    rank_neighborhoods,
+)
 from data_manager import (
     DB_PATH,
-    DatabaseUpdateInProgressError,
     FIPEZAP_BH_PATH,
     FIPEZAP_SOURCE_URL,
     TYPE_LABELS,
@@ -284,14 +293,14 @@ REFERENCE_M2_SQL = f"""
 
 
 def scroll_to_result(marker_id: str) -> None:
-    """Rola suavemente a página principal até o marcador do resultado."""
-    components.html(
+    """Rola suavemente a página até um marcador único de resultado."""
+    st.html(
         f"""
         <script>
         const markerId = "{marker_id}";
         let attempts = 0;
         function goToResult() {{
-            const marker = window.parent.document.getElementById(markerId);
+            const marker = document.getElementById(markerId);
             if (!marker) return false;
             marker.scrollIntoView({{behavior: "smooth", block: "start"}});
             return true;
@@ -302,8 +311,8 @@ def scroll_to_result(marker_id: str) -> None:
         }}, 100);
         </script>
         """,
-        height=0,
-        width=0,
+        width="content",
+        unsafe_allow_javascript=True,
     )
 
 def building_address_key(endereco: object) -> str:
@@ -412,9 +421,6 @@ def run_update(force: bool = False, include_historical: bool = False) -> None:
             )
         st.cache_data.clear()
         st.rerun()
-    except DatabaseUpdateInProgressError as exc:
-        progress.empty()
-        st.warning(str(exc))
     except Exception as exc:  # noqa: BLE001
         progress.empty()
         st.error(f"A atualização não foi concluída: {exc}")
@@ -1076,49 +1082,118 @@ def hybrid_value_update_query(
     }
 
 
+def evaluate_transaction_row(row: pd.Series, end_date) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
+    """Avalia uma transação selecionada usando a metodologia híbrida vigente."""
+    return evaluate_selected_transaction(
+        hybrid_value_update_query,
+        row,
+        old_value=float(row["valor_referencia"]),
+        purchase_date=row["data_quitacao"],
+        bairro=row["bairro"],
+        tipo=row["tipo_construtivo"],
+        area=float(row["area_construida"]),
+        ano=(
+            int(row["ano_construcao"])
+            if pd.notna(row["ano_construcao"])
+            else None
+        ),
+        padrao=(
+            row["padrao_acabamento"]
+            if pd.notna(row["padrao_acabamento"])
+            else None
+        ),
+        rua=street_from_address(row["endereco"]),
+        end_date=end_date,
+        source_address=row["endereco"],
+    )
 
+
+def transaction_subject(row: pd.Series) -> dict:
+    return {
+        "old_value": float(row["valor_referencia"]),
+        "purchase_date": row["data_quitacao"],
+        "bairro": row["bairro"],
+        "rua": street_from_address(row["endereco"]),
+        "tipo": row["tipo_construtivo"],
+        "area": float(row["area_construida"]),
+        "padrao": (
+            row["padrao_acabamento"]
+            if pd.notna(row["padrao_acabamento"])
+            else None
+        ),
+        "ano": (
+            int(row["ano_construcao"])
+            if pd.notna(row["ano_construcao"])
+            else None
+        ),
+        "source_transaction": True,
+        "source_address": row["endereco"],
+    }
+
+
+@st.cache_data(ttl=600)
 def monthly_series(
     bairro: str | None,
     tipo: str | None,
     date_start,
     date_end,
+    db_mtime: float,
 ) -> pd.DataFrame:
-    where = [
-        "data_quitacao BETWEEN ? AND ?",
-        f"{REFERENCE_M2_SQL} BETWEEN 300 AND 100000",
-    ]
-    params: list[object] = [date_start, date_end]
-
-    if bairro:
-        where.append("bairro = ?")
-        params.append(bairro)
-
-    if tipo:
-        where.append("tipo_construtivo = ?")
-        params.append(tipo)
-
+    del db_mtime
     with connect_read_only() as con:
-        return con.execute(
-            f"""
-            SELECT DATE_TRUNC('month', data_quitacao) AS mes,
-                   COUNT(*) AS transacoes,
-                   MEDIAN({REFERENCE_M2_SQL}) AS mediana_m2
-            FROM transactions
-            WHERE {' AND '.join(where)}
-            GROUP BY 1
-            ORDER BY 1
-            """,
-            params,
-        ).fetchdf()
+        return monthly_market_series(
+            con,
+            bairro=bairro,
+            tipo=tipo,
+            date_start=date_start,
+            date_end=date_end,
+            reference_m2_sql=REFERENCE_M2_SQL,
+        )
+
+
+@st.cache_data(ttl=600)
+def market_summary_query(
+    bairro: str | None,
+    tipo: str | None,
+    end_date,
+    db_mtime: float,
+) -> dict:
+    del db_mtime
+    with connect_read_only() as con:
+        return market_scope_stats(
+            con,
+            bairro=bairro,
+            tipo=tipo,
+            end_date=end_date,
+            reference_value_sql=REFERENCE_VALUE_SQL,
+            reference_m2_sql=REFERENCE_M2_SQL,
+        )
+
+
+@st.cache_data(ttl=600)
+def neighborhood_snapshot_query(
+    tipo: str | None,
+    end_date,
+    db_mtime: float,
+) -> pd.DataFrame:
+    del db_mtime
+    with connect_read_only() as con:
+        return neighborhood_snapshot(
+            con,
+            tipo=tipo,
+            end_date=end_date,
+            reference_value_sql=REFERENCE_VALUE_SQL,
+            reference_m2_sql=REFERENCE_M2_SQL,
+        )
 
 
 st.markdown(
     """
     <div class="brand">
       <div class="brand-name">Quanto Vale BH</div>
-      <div class="brand-title">Consulte transações imobiliárias declaradas em Belo Horizonte.</div>
+      <div class="brand-title">Quanto vale um imóvel em Belo Horizonte?</div>
       <div class="brand-subtitle">
-        Pesquise por rua ou bairro, compare transações e acompanhe valores de referência com dados públicos da PBH.
+        Estime um valor atual, veja os imóveis semelhantes usados na comparação e acompanhe o mercado com dados públicos da PBH.
       </div>
     </div>
     """,
@@ -1151,10 +1226,6 @@ requested_screen = st.session_state.pop("_go_screen", None)
 if requested_screen is not None:
     st.session_state.pop("screen_nav", None)
 
-requested_valuation_mode = st.session_state.pop("_go_valuation_mode", None)
-if requested_valuation_mode is not None:
-    st.session_state.pop("valuation_mode_nav", None)
-
 screen = st.segmented_control(
     "Navegação",
     ["Avaliar", "Transações", "Mercado", "Sobre"],
@@ -1168,345 +1239,80 @@ st.markdown(
 )
 
 if screen == "Avaliar":
-    st.subheader("Avaliar um imóvel")
+    st.subheader("Estimar valor atual")
     st.markdown(
-        '<div class="section-intro">Escolha como você quer chegar à referência de valor.</div>',
+        '<div class="section-intro">Encontre o imóvel na base da PBH para carregar os dados cadastrais e comparar o valor atual com negócios semelhantes.</div>',
         unsafe_allow_html=True,
     )
 
-    valuation_mode = st.segmented_control(
-        "Método de avaliação",
-        ["Comparáveis recentes", "Atualizar valor antigo"],
-        default=requested_valuation_mode or "Comparáveis recentes",
+    valuation_source_mode = st.segmented_control(
+        "Como informar o imóvel",
+        ["Buscar imóvel na base", "Informar dados manualmente"],
+        default="Buscar imóvel na base",
         label_visibility="collapsed",
-        key="valuation_mode_nav",
+        key="valuation_source_mode",
     )
 
-    if valuation_mode == "Comparáveis recentes":
-        st.caption(
-            "Use esta opção para estimar o imóvel com base em transações semelhantes recentes."
-        )
-        st.info(
-            "A área usada pelo aplicativo é a **área construída cadastrada na base da PBH**. "
-            "Ela pode incluir proporcionalmente áreas comuns e garagem e não corresponde necessariamente à área privativa anunciada. "
-            "Se você encontrar uma transação do próprio imóvel na aba **Transações**, use o botão **Avaliar este imóvel** para carregar os dados cadastrais automaticamente."
-        )
+    has_history = (
+        metadata.get("escopo") == "historico_completo"
+        or pd.Timestamp(dimensions["min_date"]) <= pd.Timestamp("2010-01-01")
+    )
 
-        with st.form("avaliacao"):
-            bairro = st.selectbox(
-                "Bairro",
-                dimensions["bairros"],
-                index=None,
-                placeholder="Selecione o bairro",
+    if valuation_source_mode == "Buscar imóvel na base":
+        if not has_history:
+            st.info(
+                "Para localizar compras antigas, o app precisa carregar o histórico completo do ITBI desde 2008."
             )
-            rua = st.text_input(
-                "Rua (opcional)",
-                placeholder="Ex.: Rua Angra",
-                help=(
-                    "Quando informada, o app tenta primeiro formar a amostra "
-                    "com imóveis da mesma rua. Se houver poucos registros, "
-                    "amplia a busca para o bairro."
-                ),
-            )
-            tipo = st.selectbox(
-                "Tipo de imóvel",
-                dimensions["tipos"],
-                index=None,
-                format_func=lambda code: TYPE_LABELS.get(code, code),
-                placeholder="Selecione o tipo",
-            )
-            area = st.number_input(
-                "Área construída cadastrada na PBH (m²)",
-                min_value=10.0,
-                max_value=10000.0,
-                value=90.0,
-                step=5.0,
-                help=(
-                    "Não use automaticamente a área privativa de anúncio. "
-                    "O filtro deve ser comparado com a área cadastral utilizada na base municipal."
-                ),
-            )
-            padrao = st.selectbox(
-                "Padrão de acabamento (opcional)",
-                dimensions["padroes"],
-                index=None,
-                placeholder="Selecione, se souber",
-                help=(
-                    "Quando informado, o app prioriza transações do mesmo "
-                    "padrão de acabamento."
-                ),
-            )
-            current_year = pd.Timestamp.today().year
-            ano = st.number_input(
-                "Ano de construção (opcional)",
-                min_value=1800,
-                max_value=current_year,
-                value=None,
-                step=1,
-                format="%d",
-                placeholder="Ex.: 2000",
-                help="Deixe em branco se não souber.",
-            )
-            submitted = st.form_submit_button(
-                "Ver imóveis comparáveis",
+            if st.button(
+                "Ativar histórico completo para esta análise",
                 type="primary",
                 width="stretch",
-            )
-
-        if submitted:
-            if not bairro or not tipo:
-                st.warning("Selecione o bairro e o tipo de imóvel.")
-            else:
-                comparables, stats = valuation_query(
-                    bairro=bairro,
-                    tipo=tipo,
-                    area=float(area),
-                    ano=int(ano) if ano is not None else None,
-                    padrao=padrao,
-                    rua=rua,
-                    end_date=dimensions["max_date"],
-                )
-                if comparables.empty:
-                    st.warning(
-                        "Não encontrei transações comparáveis suficientes "
-                        "para esse perfil na base atual."
-                    )
-                else:
-                    st.session_state["last_comparables"] = comparables
-                    st.session_state["last_valuation"] = stats
-                    st.session_state["last_subject"] = {
-                        "bairro": bairro,
-                        "rua": rua.strip() if rua else None,
-                        "tipo": tipo,
-                        "area": float(area),
-                        "padrao": padrao,
-                        "ano": int(ano) if ano is not None else None,
-                        "source_transaction": None,
-                    }
-                    st.session_state["_scroll_recent_result"] = True
-
-        if "last_valuation" in st.session_state:
-            st.markdown(
-                '<div id="recent-result-anchor"></div>',
-                unsafe_allow_html=True,
-            )
-            if st.session_state.pop("_scroll_recent_result", False):
-                scroll_to_result("recent-result-anchor")
-
-            stats = st.session_state["last_valuation"]
-            comparables = st.session_state["last_comparables"]
-            subject = st.session_state["last_subject"]
-
-            st.markdown("---")
-            if subject.get("source_transaction"):
-                st.success(
-                    "Dados cadastrais carregados diretamente de uma transação da base da PBH."
-                )
-
-            st.markdown(
-                f"""
-                <div class="result-box">
-                  <div class="result-title">Faixa observada entre imóveis comparáveis</div>
-                  <div class="result-value">{brl(stats['low_value'])} a {brl(stats['high_value'])}</div>
-                  <div class="muted">Referência central: {brl(stats['estimated'])} · mediana de {brl(stats['median_m2'], 2)}/m² cadastral equivalente em {data_limit_label(stats.get('reference_date'))}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-            c1, c2 = st.columns(2)
-            c1.metric(
-                "Imóveis comparáveis",
-                number_br(stats["records"]),
-            )
-            c2.metric(
-                "Período considerado",
-                f"{stats.get('months', '—')} meses",
-            )
-
-            location_text = (
-                f", {subject['rua']}"
-                if subject.get("rua")
-                else ""
-            )
-            year_text = (
-                f", construção {subject['ano']}"
-                if subject.get("ano")
-                else ""
-            )
-            st.caption(
-                f"Perfil pesquisado: "
-                f"{TYPE_LABELS.get(subject['tipo'], subject['tipo'])}, "
-                f"{number_br(subject['area'], 1)} m² de área cadastral PBH, "
-                f"{subject['bairro']}{location_text}"
-                f"{f', padrão {subject['padrao']}' if subject.get('padrao') else ''}"
-                f"{year_text}. "
-                f"A faixa usa o valor de referência por m² cadastral em equivalente de {data_limit_label(stats.get('reference_date'))}."
-            )
-
-            if subject.get("rua"):
-                if stats.get("location_level") == "street":
-                    st.info(
-                        f"A amostra foi formada com transações encontradas "
-                        f"na mesma rua informada ({subject['rua']})."
-                    )
-                else:
-                    st.info(
-                        f"A rua {subject['rua']} foi priorizada, mas havia "
-                        "poucos registros comparáveis; a amostra precisou "
-                        "ser ampliada para o bairro."
-                    )
-
-            if subject.get("padrao"):
-                if stats.get("strict_pattern"):
-                    st.info(
-                        f"Os comparáveis usados são do mesmo padrão de "
-                        f"acabamento ({subject['padrao']})."
-                    )
-                else:
-                    st.info(
-                        f"O padrão {subject['padrao']} foi priorizado, mas "
-                        "a amostra precisou incluir outros padrões."
-                    )
-
-            if stats.get("time_adjusted"):
-                st.info(
-                    f"Para apartamentos, comparáveis de meses anteriores foram atualizados temporalmente pelo FipeZAP BH até {data_limit_label(stats.get('reference_date'))} antes do cálculo da mediana."
-                )
-            st.caption(
-                "Valor de referência = maior valor entre o declarado e a base de cálculo da PBH. "
-                "A estimativa é estatística e não substitui laudo técnico."
-            )
-
-            with st.expander("Como a faixa de referência é calculada?"):
-                st.write(
-                    "O app usa o maior valor entre o valor declarado e a base de cálculo da PBH como **valor de referência**. "
-                    "Depois seleciona transações do mesmo tipo de imóvel, priorizando rua, área cadastral semelhante, recência, "
-                    "ano de construção e padrão de acabamento. A busca não ultrapassa 36 meses. Para apartamentos, os comparáveis "
-                    "são trazidos a equivalente temporal atual pelo FipeZAP BH antes do cálculo. A faixa usa o intervalo central "
-                    "do valor por m² cadastral equivalente e reduz o peso de valores extremos."
-                )
-
-            st.subheader("Imóveis usados como referência")
-            for _, row in comparables.head(10).iterrows():
-                with st.container(border=True):
-                    address_header(
-                        row["endereco"],
-                        row["bairro"],
-                        row["data_quitacao"],
-                        TYPE_LABELS.get(
-                            row["tipo_construtivo"],
-                            row["tipo_descricao"],
-                        ),
-                    )
-                    c1, c2 = st.columns(2)
-                    c1.metric(
-                        "Equivalente atual",
-                        brl(row["valor_equivalente_atual"]),
-                    )
-                    c2.metric(
-                        "Por m² cadastral atual",
-                        brl(row["valor_m2_equivalente_atual"], 2),
-                    )
-                    st.markdown(
-                        f'<div class="record-detail">'
-                        f'Referência na data: {brl(row["valor_referencia"])} · '
-                        f'Declarado: {brl(row["valor_declarado"])} · '
-                        f'Base PBH: {brl(row["valor_base_calculo"])} · '
-                        f'Área cadastral PBH: {number_br(row["area_construida"], 2)} m² · '
-                        f'Padrão: {html.escape(text_or_na(row["padrao_acabamento"]))}'
-                        f'</div>',
-                        unsafe_allow_html=True,
-                    )
-                    maps_button(row["endereco"], row["bairro"])
-
-    else:
-        st.caption(
-            "Use esta opção quando existe uma compra ou um valor antigo conhecido para o imóvel."
-        )
-        st.info(
-            "A metodologia agora cruza referências complementares. Para apartamentos, o app usa o FipeZAP BH como âncora temporal, "
-            "compara o imóvel com transações recentes da PBH e, quando encontra negócios do mesmo endereço, atualiza essas transações pelo FipeZAP."
-        )
-
-        old_source_mode = st.segmented_control(
-            "Origem do valor antigo",
-            ["Buscar transação na base", "Informar manualmente"],
-            default="Buscar transação na base",
-            label_visibility="collapsed",
-            key="old_source_mode",
-        )
-
-        has_history = (
-            metadata.get("escopo") == "historico_completo"
-            or pd.Timestamp(dimensions["min_date"])
-            <= pd.Timestamp("2010-01-01")
-        )
-
-        if old_source_mode == "Buscar transação na base":
-            if not has_history:
-                st.info(
-                    "Para localizar compras antigas, o app precisa carregar o histórico completo do ITBI desde 2008."
-                )
-                if st.button(
-                    "Ativar histórico completo para esta análise",
-                    type="primary",
-                    width="stretch",
-                ):
-                    run_update(include_historical=True)
-                st.stop()
-
+            ):
+                run_update(include_historical=True)
+        else:
             st.success(
                 "Opção recomendada: área cadastral, padrão, ano, tipo e valor de referência são carregados diretamente da transação."
             )
 
-            with st.form("buscar_transacao_antiga"):
-                old_search_text = st.text_input(
+            with st.form("buscar_imovel_avaliacao"):
+                valuation_search_text = st.text_input(
                     "Endereço ou rua",
                     placeholder="Ex.: Rua Angra 123",
                 )
-                old_search_bairro = st.selectbox(
+                valuation_search_bairro = st.selectbox(
                     "Bairro (opcional)",
                     [None] + dimensions["bairros"],
-                    format_func=(
-                        lambda x: "Todos os bairros"
-                        if x is None
-                        else x
-                    ),
+                    format_func=lambda x: "Todos os bairros" if x is None else x,
                 )
-                old_search_submitted = st.form_submit_button(
-                    "Buscar transações antigas",
+                valuation_search_submitted = st.form_submit_button(
+                    "Buscar imóvel",
                     type="primary",
                     width="stretch",
                 )
 
-            if old_search_submitted:
-                if not old_search_text and not old_search_bairro:
-                    st.warning(
-                        "Informe pelo menos o endereço, a rua ou o bairro."
-                    )
+            if valuation_search_submitted:
+                if not valuation_search_text and not valuation_search_bairro:
+                    st.warning("Informe pelo menos o endereço, a rua ou o bairro.")
                 else:
-                    st.session_state["old_search_results"] = (
-                        search_transactions_for_valuation(
-                            text=old_search_text,
-                            bairro=old_search_bairro,
-                            date_start=dimensions["min_date"],
-                            date_end=dimensions["max_date"],
-                        )
+                    st.session_state["valuation_search_results"] = search_transactions_for_valuation(
+                        text=valuation_search_text,
+                        bairro=valuation_search_bairro,
+                        date_start=dimensions["min_date"],
+                        date_end=dimensions["max_date"],
                     )
 
-            old_results = st.session_state.get(
-                "old_search_results",
+            valuation_results = st.session_state.get(
+                "valuation_search_results",
                 pd.DataFrame(),
             )
 
-            if not old_results.empty:
-                st.subheader("Selecione a transação de referência")
+            if not valuation_results.empty:
+                st.subheader("Selecione o imóvel")
                 st.caption(
-                    f"{number_br(len(old_results))} registros encontrados."
+                    f"{number_br(len(valuation_results))} transações encontradas. Se o imóvel aparecer mais de uma vez, escolha a referência histórica que você reconhece."
                 )
 
-                for _, row in old_results.head(30).iterrows():
+                for _, row in valuation_results.head(30).iterrows():
                     record_key = str(row["registro_id"])
                     with st.container(border=True):
                         address_header(
@@ -1516,14 +1322,8 @@ if screen == "Avaliar":
                             row["tipo_descricao"],
                         )
                         c1, c2 = st.columns(2)
-                        c1.metric(
-                            "Valor de referência",
-                            brl(row["valor_referencia"]),
-                        )
-                        c2.metric(
-                            "Por m² cadastral",
-                            brl(row["valor_m2_referencia"], 2),
-                        )
+                        c1.metric("Valor de referência", brl(row["valor_referencia"]))
+                        c2.metric("Por m² cadastral", brl(row["valor_m2_referencia"], 2))
                         st.markdown(
                             f'<div class="record-detail">'
                             f'Declarado: {brl(row["valor_declarado"])} · '
@@ -1542,31 +1342,10 @@ if screen == "Avaliar":
                             type="primary",
                             width="stretch",
                         ):
-                            local_rows, building_rows, hybrid_stats = (
-                                evaluate_selected_transaction(
-                                    hybrid_value_update_query,
-                                    row,
-                                    old_value=float(row["valor_referencia"]),
-                                    purchase_date=row["data_quitacao"],
-                                    bairro=row["bairro"],
-                                    tipo=row["tipo_construtivo"],
-                                    area=float(row["area_construida"]),
-                                    ano=(
-                                        int(row["ano_construcao"])
-                                        if pd.notna(row["ano_construcao"])
-                                        else None
-                                    ),
-                                    padrao=(
-                                        row["padrao_acabamento"]
-                                        if pd.notna(row["padrao_acabamento"])
-                                        else None
-                                    ),
-                                    rua=street_from_address(row["endereco"]),
-                                    end_date=dimensions["max_date"],
-                                    source_address=row["endereco"],
-                                )
+                            local_rows, building_rows, hybrid_stats = evaluate_transaction_row(
+                                row,
+                                dimensions["max_date"],
                             )
-
                             if not hybrid_stats:
                                 st.warning(
                                     "Não foi possível formar referências suficientes para este imóvel."
@@ -1577,215 +1356,183 @@ if screen == "Avaliar":
                                     local_rows=local_rows,
                                     building_rows=building_rows,
                                     stats=hybrid_stats,
-                                    subject={
-                                        "old_value": float(row["valor_referencia"]),
-                                        "purchase_date": row["data_quitacao"],
-                                        "bairro": row["bairro"],
-                                        "rua": street_from_address(row["endereco"]),
-                                        "tipo": row["tipo_construtivo"],
-                                        "area": float(row["area_construida"]),
-                                        "padrao": (
-                                            row["padrao_acabamento"]
-                                            if pd.notna(row["padrao_acabamento"])
-                                            else None
-                                        ),
-                                        "ano": (
-                                            int(row["ano_construcao"])
-                                            if pd.notna(row["ano_construcao"])
-                                            else None
-                                        ),
-                                        "source_transaction": True,
-                                        "source_address": row["endereco"],
-                                    },
+                                    subject=transaction_subject(row),
                                 )
                                 st.rerun()
 
-        else:
-            st.warning(
-                "No preenchimento manual, use **área cadastrada na PBH**, não a área privativa de anúncio."
+    else:
+        st.warning(
+            "Use a área construída cadastrada na PBH, e não automaticamente a área privativa de anúncio. O preenchimento manual é uma alternativa quando o imóvel não é localizado na base."
+        )
+
+        default_purchase = max(
+            pd.Timestamp(dimensions["min_date"]),
+            pd.Timestamp(dimensions["max_date"]) - pd.DateOffset(years=5),
+        ).date()
+
+        with st.form("valor_antigo_hibrido"):
+            old_value = st.number_input(
+                "Valor antigo conhecido (R$)",
+                min_value=1000.0,
+                max_value=1000000000.0,
+                value=450000.0,
+                step=10000.0,
+            )
+            purchase_date = st.date_input(
+                "Data aproximada da compra ou do valor conhecido",
+                value=default_purchase,
+                min_value=dimensions["min_date"],
+                max_value=dimensions["max_date"],
+            )
+            bairro_old = st.selectbox(
+                "Bairro",
+                dimensions["bairros"],
+                index=None,
+                placeholder="Selecione o bairro",
+                key="hybrid_bairro",
+            )
+            rua_old = st.text_input(
+                "Rua (opcional)",
+                placeholder="Ex.: Rua Angra",
+                key="hybrid_rua",
+            )
+            tipo_old = st.selectbox(
+                "Tipo de imóvel",
+                dimensions["tipos"],
+                index=None,
+                format_func=lambda code: TYPE_LABELS.get(code, code),
+                placeholder="Selecione o tipo",
+                key="hybrid_tipo",
+            )
+            area_old = st.number_input(
+                "Área construída cadastrada na PBH (m²)",
+                min_value=10.0,
+                max_value=10000.0,
+                value=90.0,
+                step=5.0,
+                key="hybrid_area",
+            )
+            padrao_old = st.selectbox(
+                "Padrão de acabamento (opcional)",
+                dimensions["padroes"],
+                index=None,
+                placeholder="Selecione, se souber",
+                key="hybrid_padrao",
+            )
+            ano_old = st.number_input(
+                "Ano de construção (opcional)",
+                min_value=1800,
+                max_value=pd.Timestamp.today().year,
+                value=None,
+                step=1,
+                format="%d",
+                placeholder="Ex.: 2000",
+                key="hybrid_ano",
+            )
+            hybrid_submitted = st.form_submit_button(
+                "Estimar valor atual",
+                type="primary",
+                width="stretch",
             )
 
-            default_purchase = max(
-                pd.Timestamp(dimensions["min_date"]),
-                pd.Timestamp(dimensions["max_date"])
-                - pd.DateOffset(years=5),
-            ).date()
+        if hybrid_submitted:
+            validation_error = None
+            if not bairro_old or not tipo_old:
+                validation_error = "Selecione o bairro e o tipo de imóvel."
+            elif ano_old is not None and int(ano_old) > pd.Timestamp(purchase_date).year:
+                validation_error = "O ano de construção não pode ser posterior à data de referência."
 
-            with st.form("valor_antigo_hibrido"):
-                old_value = st.number_input(
-                    "Valor antigo conhecido (R$)",
-                    min_value=1000.0,
-                    max_value=1000000000.0,
-                    value=450000.0,
-                    step=10000.0,
-                    help=(
-                        "Se a origem for uma transação do ITBI, use o maior entre "
-                        "o valor declarado e a base de cálculo da PBH."
-                    ),
+            if validation_error:
+                st.warning(validation_error)
+            else:
+                local_rows, building_rows, hybrid_stats = hybrid_value_update_query(
+                    old_value=float(old_value),
+                    purchase_date=purchase_date,
+                    bairro=bairro_old,
+                    tipo=tipo_old,
+                    area=float(area_old),
+                    ano=int(ano_old) if ano_old is not None else None,
+                    padrao=padrao_old,
+                    rua=rua_old,
+                    end_date=dimensions["max_date"],
                 )
-                purchase_date = st.date_input(
-                    "Data aproximada da compra ou do valor conhecido",
-                    value=default_purchase,
-                    min_value=dimensions["min_date"],
-                    max_value=dimensions["max_date"],
-                )
-                bairro_old = st.selectbox(
-                    "Bairro",
-                    dimensions["bairros"],
-                    index=None,
-                    placeholder="Selecione o bairro",
-                    key="hybrid_bairro",
-                )
-                rua_old = st.text_input(
-                    "Rua (opcional)",
-                    placeholder="Ex.: Rua Angra",
-                    key="hybrid_rua",
-                )
-                tipo_old = st.selectbox(
-                    "Tipo de imóvel",
-                    dimensions["tipos"],
-                    index=None,
-                    format_func=(
-                        lambda code: TYPE_LABELS.get(code, code)
-                    ),
-                    placeholder="Selecione o tipo",
-                    key="hybrid_tipo",
-                )
-                area_old = st.number_input(
-                    "Área construída cadastrada na PBH (m²)",
-                    min_value=10.0,
-                    max_value=10000.0,
-                    value=90.0,
-                    step=5.0,
-                    key="hybrid_area",
-                )
-                padrao_old = st.selectbox(
-                    "Padrão de acabamento (opcional)",
-                    dimensions["padroes"],
-                    index=None,
-                    placeholder="Selecione, se souber",
-                    key="hybrid_padrao",
-                )
-                ano_old = st.number_input(
-                    "Ano de construção (opcional)",
-                    min_value=1800,
-                    max_value=pd.Timestamp.today().year,
-                    value=None,
-                    step=1,
-                    format="%d",
-                    placeholder="Ex.: 2000",
-                    key="hybrid_ano",
-                )
-                hybrid_submitted = st.form_submit_button(
-                    "Calcular estimativa híbrida",
-                    type="primary",
-                    width="stretch",
-                )
-
-            if hybrid_submitted:
-                validation_error = None
-                if not bairro_old or not tipo_old:
-                    validation_error = (
-                        "Selecione o bairro e o tipo de imóvel."
+                if not hybrid_stats:
+                    st.warning(
+                        "Não foi possível formar referências suficientes para essa combinação."
                     )
-                elif (
-                    ano_old is not None
-                    and int(ano_old)
-                    > pd.Timestamp(purchase_date).year
-                ):
-                    validation_error = (
-                        "O ano de construção não pode ser posterior "
-                        "à data de referência."
-                    )
-
-                if validation_error:
-                    st.warning(validation_error)
                 else:
-                    local_rows, building_rows, hybrid_stats = (
-                        hybrid_value_update_query(
-                            old_value=float(old_value),
-                            purchase_date=purchase_date,
-                            bairro=bairro_old,
-                            tipo=tipo_old,
-                            area=float(area_old),
-                            ano=(
-                                int(ano_old)
-                                if ano_old is not None
-                                else None
-                            ),
-                            padrao=padrao_old,
-                            rua=rua_old,
-                            end_date=dimensions["max_date"],
-                        )
+                    store_hybrid_result(
+                        st.session_state,
+                        local_rows=local_rows,
+                        building_rows=building_rows,
+                        stats=hybrid_stats,
+                        subject={
+                            "old_value": float(old_value),
+                            "purchase_date": purchase_date,
+                            "bairro": bairro_old,
+                            "rua": rua_old.strip() if rua_old else None,
+                            "tipo": tipo_old,
+                            "area": float(area_old),
+                            "padrao": padrao_old,
+                            "ano": int(ano_old) if ano_old is not None else None,
+                            "source_transaction": False,
+                        },
                     )
+                    st.rerun()
 
-                    if not hybrid_stats:
-                        st.warning(
-                            "Não foi possível formar referências suficientes para essa combinação."
-                        )
-                    else:
-                        store_hybrid_result(
-                            st.session_state,
-                            local_rows=local_rows,
-                            building_rows=building_rows,
-                            stats=hybrid_stats,
-                            subject={
-                                "old_value": float(old_value),
-                                "purchase_date": purchase_date,
-                                "bairro": bairro_old,
-                                "rua": (
-                                    rua_old.strip()
-                                    if rua_old
-                                    else None
-                                ),
-                                "tipo": tipo_old,
-                                "area": float(area_old),
-                                "padrao": padrao_old,
-                                "ano": (
-                                    int(ano_old)
-                                    if ano_old is not None
-                                    else None
-                                ),
-                                "source_transaction": False,
-                            },
-                        )
+    if "hybrid_stats" in st.session_state:
+        scroll_token = consume_hybrid_scroll(st.session_state)
+        active_token = int(st.session_state.get(HYBRID_SCROLL_SEQUENCE, 0))
+        marker_id = f"hybrid-result-anchor-{active_token}"
+        st.markdown(
+            f'<div id="{marker_id}"></div>',
+            unsafe_allow_html=True,
+        )
+        if scroll_token is not None:
+            scroll_to_result(f"hybrid-result-anchor-{scroll_token}")
 
-        if "hybrid_stats" in st.session_state:
-            st.markdown(
-                '<div id="hybrid-result-anchor"></div>',
-                unsafe_allow_html=True,
-            )
-            if consume_hybrid_scroll(st.session_state):
-                scroll_to_result("hybrid-result-anchor")
+        stats = st.session_state["hybrid_stats"]
+        local_rows = st.session_state["hybrid_local"]
+        building_rows = st.session_state["hybrid_building"]
+        subject = st.session_state["hybrid_subject"]
 
-            stats = st.session_state["hybrid_stats"]
-            local_rows = st.session_state["hybrid_local"]
-            building_rows = st.session_state["hybrid_building"]
-            subject = st.session_state["hybrid_subject"]
+        building_ids = (
+            set(building_rows["registro_id"].astype(str))
+            if not building_rows.empty and "registro_id" in building_rows.columns
+            else set()
+        )
+        other_local_rows = (
+            local_rows[~local_rows["registro_id"].astype(str).isin(building_ids)].copy()
+            if not local_rows.empty and "registro_id" in local_rows.columns
+            else local_rows.copy()
+        )
+        similar_count = len(building_rows) + len(other_local_rows)
 
-            st.markdown("---")
-
-            if subject.get("source_transaction"):
-                st.success(
-                    "A referência histórica foi carregada diretamente da transação selecionada."
-                )
-                st.caption(
-                    f"{short_address(subject.get('source_address'), subject['bairro'])} · "
-                    f"{pd.Timestamp(subject['purchase_date']).strftime('%d/%m/%Y')} · "
-                    f"valor de referência antigo {brl(subject['old_value'])}."
-                )
-
-            st.markdown(
-                f"""
-                <div class="result-box">
-                  <div class="result-title">Estimativa híbrida de valor atual</div>
-                  <div class="result-value">{brl(stats['estimated'])}</div>
-                  <div class="muted">Referências disponíveis: {brl(stats['low_value'])} a {brl(stats['high_value'])} · confiança {stats['confidence'].lower()}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
+        st.markdown("---")
+        if subject.get("source_transaction"):
+            st.success("Dados do imóvel carregados diretamente da transação selecionada.")
+            st.caption(
+                f"{short_address(subject.get('source_address'), subject['bairro'])} · "
+                f"{pd.Timestamp(subject['purchase_date']).strftime('%d/%m/%Y')} · "
+                f"valor de referência histórico {brl(subject['old_value'])}."
             )
 
+        st.markdown(
+            f"""
+            <div class="result-box">
+              <div class="result-title">Estimativa de valor atual</div>
+              <div class="result-value">{brl(stats['estimated'])}</div>
+              <div class="muted">Faixa entre as referências disponíveis: {brl(stats['low_value'])} a {brl(stats['high_value'])} · confiança {stats['confidence'].lower()}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        summary_tab, similar_tab = st.tabs(
+            ["Resumo", f"Imóveis semelhantes ({similar_count})"]
+        )
+
+        with summary_tab:
             if stats["spread_pct"] > 30:
                 st.warning(
                     f"As referências divergem {stats['spread_pct']:.1f}% entre o menor e o maior valor. "
@@ -1794,14 +1541,10 @@ if screen == "Avaliar":
                 )
 
             st.subheader("Referências consideradas")
-
             anchor_df = pd.DataFrame(stats["anchors"])
             columns = st.columns(len(anchor_df))
             for col, (_, anchor) in zip(columns, anchor_df.iterrows()):
-                col.metric(
-                    anchor["source"],
-                    brl(anchor["value"]),
-                )
+                col.metric(anchor["source"], brl(anchor["value"]))
                 col.caption(str(anchor["detail"]))
 
             fig = px.bar(
@@ -1809,10 +1552,7 @@ if screen == "Avaliar":
                 x="source",
                 y="value",
                 text_auto=".3s",
-                labels={
-                    "source": "Referência",
-                    "value": "Valor estimado",
-                },
+                labels={"source": "Referência", "value": "Valor estimado"},
             )
             fig.update_layout(
                 yaxis_tickprefix="R$ ",
@@ -1830,99 +1570,102 @@ if screen == "Avaliar":
             if fipe_info is not None:
                 growth_text = f"{fipe_info['growth_pct']:+.1f}%".replace(".", ",")
                 st.markdown(
-                    f"**Âncora temporal FipeZAP BH:** o número-índice passou de "
-                    f"{number_br(fipe_info['start_index'], 2)} para {number_br(fipe_info['end_index'], 2)}, "
-                    f"uma variação de **{growth_text}**. "
-                    f"O valor antigo de {brl(subject['old_value'])} corresponderia a "
+                    f"**Âncora temporal FipeZAP BH:** variação de **{growth_text}** entre "
+                    f"{fipe_info['start_date'].strftime('%m/%Y')} e {fipe_info['end_date'].strftime('%m/%Y')}. "
+                    f"O valor histórico de {brl(subject['old_value'])} corresponderia a "
                     f"**{brl(subject['old_value'] * fipe_info['factor'])}** pela evolução do índice."
                 )
                 st.caption(
-                    "O FipeZAP é usado como benchmark temporal de anúncios de apartamentos prontos em Belo Horizonte; "
-                    "não é tratado como preço efetivo de uma transação específica."
+                    "O FipeZAP é usado como benchmark temporal de anúncios de apartamentos prontos em Belo Horizonte; não é tratado como preço efetivo de uma transação específica."
                 )
             elif subject["tipo"] != "AP":
                 st.warning(
-                    "O FipeZAP residencial de venda acompanha apartamentos prontos. "
-                    "Por isso, ele não foi usado como âncora temporal para este tipo de imóvel."
+                    "O FipeZAP residencial de venda acompanha apartamentos prontos. Por isso, ele não foi usado como âncora temporal para este tipo de imóvel."
                 )
 
             local_stats = stats.get("local_stats") or {}
             if local_stats:
                 st.markdown(
-                    f"**Comparáveis atuais PBH:** {int(local_stats['records'])} imóveis semelhantes resultaram em "
-                    f"referência central de **{brl(local_stats['estimated'])}**."
+                    f"**Comparáveis PBH:** {int(local_stats['records'])} imóveis semelhantes resultaram em referência central de **{brl(local_stats['estimated'])}**."
                 )
-
             if stats.get("building_records", 0) > 0:
                 st.markdown(
-                    f"**Mesmo endereço:** {stats['building_records']} transação(ões) do edifício foi(ram) "
-                    "normalizada(s) para a área cadastral do imóvel e trazida(s) ao período atual pelo FipeZAP."
+                    f"**Mesmo endereço:** {stats['building_records']} transação(ões) do endereço foi(ram) normalizada(s) para a área cadastral do imóvel e trazida(s) ao período atual pelo FipeZAP."
                 )
 
-            with st.expander("Como a metodologia híbrida funciona?"):
+            with st.expander("Como calculamos esta estimativa?"):
                 st.write(
-                    "O cálculo não preserva automaticamente o desconto ou o ágio existente na compra antiga. "
-                    "A primeira referência atualiza o valor antigo pelo FipeZAP BH. "
-                    "A segunda mede o nível atual de imóveis comparáveis na base da PBH. "
-                    "Quando há negócios do mesmo endereço, cada transação é convertida para um valor equivalente do imóvel analisado "
-                    "e atualizada temporalmente pelo FipeZAP. O resultado central é a mediana dessas referências."
+                    "O cálculo confronta a evolução temporal do valor histórico, o nível atual de imóveis comparáveis na base da PBH e, quando disponíveis, negócios do mesmo endereço. O resultado central é a mediana das referências disponíveis."
                 )
                 st.caption(
-                    "O FipeZAP acompanha preços anunciados de apartamentos prontos. A base PBH contém valores declarados e bases de cálculo do ITBI. "
-                    "A combinação é uma referência estatística e não substitui laudo técnico."
+                    "Valor de referência = maior valor entre o declarado e a base de cálculo da PBH. A estimativa é estatística e não substitui laudo técnico."
                 )
 
-            if not local_rows.empty:
-                with st.expander("Ver comparáveis recentes da PBH"):
-                    for _, row in local_rows.head(10).iterrows():
-                        with st.container(border=True):
-                            address_header(
-                                row["endereco"],
-                                row["bairro"],
-                                row["data_quitacao"],
-                                TYPE_LABELS.get(
-                                    row["tipo_construtivo"],
-                                    row["tipo_descricao"],
-                                ),
-                            )
-                            c1, c2 = st.columns(2)
-                            c1.metric(
-                                "Valor de referência",
-                                brl(row["valor_referencia"]),
-                            )
-                            c2.metric(
-                                "Por m² cadastral",
-                                brl(row["valor_m2_referencia"], 2),
-                            )
-                            maps_button(row["endereco"], row["bairro"])
+        with similar_tab:
+            st.caption(
+                "Abaixo estão as transações que efetivamente participaram das referências do cálculo. Negócios do mesmo endereço aparecem primeiro."
+            )
 
             if not building_rows.empty:
-                with st.expander("Ver transações do mesmo endereço atualizadas"):
-                    for _, row in building_rows.sort_values(
-                        "data_quitacao",
-                        ascending=False,
-                    ).head(10).iterrows():
-                        with st.container(border=True):
-                            address_header(
-                                row["endereco"],
-                                row["bairro"],
-                                row["data_quitacao"],
-                                row["tipo_descricao"],
-                            )
-                            c1, c2 = st.columns(2)
-                            c1.metric(
-                                "Referência na época",
-                                brl(row["valor_referencia"]),
-                            )
-                            c2.metric(
-                                "Equivalente atual",
-                                brl(row["valor_equivalente_atual"]),
-                            )
-                            st.caption(
-                                f"Área cadastral PBH: {number_br(row['area_construida'], 2)} m² · "
-                                f"fator FipeZAP aplicado: {number_br(row['fator_fipe'], 4)}"
-                            )
-                            maps_button(row["endereco"], row["bairro"])
+                st.subheader("Mesmo endereço")
+                for _, row in building_rows.sort_values(
+                    "data_quitacao", ascending=False
+                ).head(10).iterrows():
+                    with st.container(border=True):
+                        address_header(
+                            row["endereco"],
+                            row["bairro"],
+                            row["data_quitacao"],
+                            row["tipo_descricao"],
+                        )
+                        c1, c2 = st.columns(2)
+                        c1.metric("Referência na época", brl(row["valor_referencia"]))
+                        c2.metric("Equivalente atual", brl(row["valor_equivalente_atual"]))
+                        st.caption(
+                            f"Área cadastral PBH: {number_br(row['area_construida'], 2)} m² · fator FipeZAP aplicado: {number_br(row['fator_fipe'], 4)}"
+                        )
+                        maps_button(row["endereco"], row["bairro"])
+
+            if not other_local_rows.empty:
+                st.subheader("Outros imóveis semelhantes")
+                for _, row in other_local_rows.head(10).iterrows():
+                    with st.container(border=True):
+                        address_header(
+                            row["endereco"],
+                            row["bairro"],
+                            row["data_quitacao"],
+                            TYPE_LABELS.get(row["tipo_construtivo"], row["tipo_descricao"]),
+                        )
+                        c1, c2 = st.columns(2)
+                        c1.metric("Equivalente atual", brl(row["valor_equivalente_atual"]))
+                        c2.metric("Por m² cadastral atual", brl(row["valor_m2_equivalente_atual"], 2))
+                        st.markdown(
+                            f'<div class="record-detail">'
+                            f'Referência na data: {brl(row["valor_referencia"])} · '
+                            f'Área cadastral PBH: {number_br(row["area_construida"], 2)} m² · '
+                            f'Padrão: {html.escape(text_or_na(row["padrao_acabamento"]))}'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+                        maps_button(row["endereco"], row["bairro"])
+
+            if similar_count == 0:
+                st.info("Não há transações individuais para detalhar nesta estimativa.")
+            else:
+                if st.button(
+                    "Ver mais imóveis semelhantes",
+                    key="view_more_similar",
+                    width="stretch",
+                ):
+                    st.session_state["_prefill_transactions"] = {
+                        "text": subject.get("rua") or "",
+                        "bairros": [subject["bairro"]],
+                        "tipos": [subject["tipo"]],
+                    }
+                    st.session_state["_go_screen"] = "Transações"
+                    st.rerun()
+
+
 
 elif screen == "Transações":
     building_selected = st.session_state.get("building_selected")
@@ -1997,17 +1740,31 @@ elif screen == "Transações":
             "Ela pode incluir proporcionalmente áreas comuns e garagem e não corresponde necessariamente à área privativa usada em anúncios."
         )
 
+        transaction_prefill = st.session_state.pop("_prefill_transactions", None)
+        if transaction_prefill:
+            st.session_state["transaction_search_text"] = transaction_prefill.get("text", "")
+            st.session_state["transaction_bairros"] = [
+                item for item in transaction_prefill.get("bairros", [])
+                if item in dimensions["bairros"]
+            ]
+            st.session_state["transaction_tipos"] = [
+                item for item in transaction_prefill.get("tipos", [])
+                if item in dimensions["tipos"]
+            ]
+
         with st.form("consulta"):
             search_text = st.text_input(
                 "Rua, endereço ou bairro",
                 placeholder=(
                     "Ex.: Rua Campos Elíseos ou Nova Granada"
                 ),
+                key="transaction_search_text",
             )
             bairros = st.multiselect(
                 "Bairro",
                 dimensions["bairros"],
                 placeholder="Todos os bairros",
+                key="transaction_bairros",
             )
             tipos = st.multiselect(
                 "Tipo de imóvel",
@@ -2016,6 +1773,7 @@ elif screen == "Transações":
                     lambda code: TYPE_LABELS.get(code, code)
                 ),
                 placeholder="Todos os tipos",
+                key="transaction_tipos",
             )
             padroes = st.multiselect(
                 "Padrão de acabamento (opcional)",
@@ -2112,60 +1870,23 @@ elif screen == "Transações":
                         key=f"evaluate_{record_key}",
                         width="stretch",
                     ):
-                        comparables, valuation_stats = valuation_query(
-                            bairro=row["bairro"],
-                            tipo=row["tipo_construtivo"],
-                            area=float(row["area_construida"]),
-                            ano=(
-                                int(row["ano_construcao"])
-                                if pd.notna(row["ano_construcao"])
-                                else None
-                            ),
-                            padrao=(
-                                row["padrao_acabamento"]
-                                if pd.notna(row["padrao_acabamento"])
-                                else None
-                            ),
-                            rua=street_from_address(row["endereco"]),
-                            end_date=dimensions["max_date"],
-                            exclude_registro_id=row["registro_id"],
-                            exclude_chave_tecnica=row["chave_tecnica"],
+                        local_rows, building_rows, hybrid_stats = evaluate_transaction_row(
+                            row,
+                            dimensions["max_date"],
                         )
-
-                        if comparables.empty:
+                        if not hybrid_stats:
                             st.warning(
-                                "Não encontrei comparáveis suficientes "
-                                "para avaliar este imóvel."
+                                "Não foi possível formar referências suficientes para avaliar este imóvel."
                             )
                         else:
-                            st.session_state["last_comparables"] = comparables
-                            st.session_state["last_valuation"] = valuation_stats
-                            st.session_state["last_subject"] = {
-                                "bairro": row["bairro"],
-                                "rua": street_from_address(
-                                    row["endereco"]
-                                ),
-                                "tipo": row["tipo_construtivo"],
-                                "area": float(row["area_construida"]),
-                                "padrao": (
-                                    row["padrao_acabamento"]
-                                    if pd.notna(
-                                        row["padrao_acabamento"]
-                                    )
-                                    else None
-                                ),
-                                "ano": (
-                                    int(row["ano_construcao"])
-                                    if pd.notna(row["ano_construcao"])
-                                    else None
-                                ),
-                                "source_transaction": True,
-                                "source_address": row["endereco"],
-                            }
-                            st.session_state["_go_screen"] = "Avaliar"
-                            st.session_state["_go_valuation_mode"] = (
-                                "Comparáveis recentes"
+                            store_hybrid_result(
+                                st.session_state,
+                                local_rows=local_rows,
+                                building_rows=building_rows,
+                                stats=hybrid_stats,
+                                subject=transaction_subject(row),
                             )
+                            st.session_state["_go_screen"] = "Avaliar"
                             st.rerun()
 
                     if b2.button(
@@ -2207,33 +1928,307 @@ elif screen == "Transações":
             )
 
 elif screen == "Mercado":
-    st.subheader("Acompanhar o mercado")
-    st.markdown('<div class="section-intro">Acompanhe a evolução mensal do valor de referência mediano por m² cadastral e do volume de transações.</div>', unsafe_allow_html=True)
-    bairro_market = st.selectbox("Bairro", [None] + dimensions["bairros"], format_func=lambda x: "Todos os bairros" if x is None else x)
-    market_type_options = [None] + dimensions["tipos"]
-    market_default = (
-        market_type_options.index("AP")
-        if "AP" in market_type_options
-        else 0
+    st.subheader("Mercado imobiliário de Belo Horizonte")
+    st.markdown(
+        '<div class="section-intro">Veja como os valores e o volume de negócios estão se movendo, compare bairros e entenda a faixa de preços das transações.</div>',
+        unsafe_allow_html=True,
     )
-    tipo_market = st.selectbox(
+
+    filter_col1, filter_col2 = st.columns(2)
+    bairro_market = filter_col1.selectbox(
+        "Bairro",
+        [None] + dimensions["bairros"],
+        format_func=lambda x: "Visão de Belo Horizonte" if x is None else smart_title(x),
+        key="market_bairro",
+    )
+    market_type_options = [None] + dimensions["tipos"]
+    market_default = market_type_options.index("AP") if "AP" in market_type_options else 0
+    tipo_market = filter_col2.selectbox(
         "Tipo de imóvel",
         market_type_options,
         index=market_default,
         format_func=lambda x: "Todos os tipos" if x is None else TYPE_LABELS.get(x, x),
+        key="market_tipo",
     )
-    default_start = max(dimensions["min_date"], dimensions["max_date"] - timedelta(days=730))
-    series = monthly_series(bairro_market, tipo_market, default_start, dimensions["max_date"])
-    if series.empty:
-        st.info("Não há dados suficientes para essa combinação.")
+
+    db_mtime = DB_PATH.stat().st_mtime
+    scope_label = smart_title(bairro_market) if bairro_market else "Belo Horizonte"
+    type_label = TYPE_LABELS.get(tipo_market, tipo_market) if tipo_market else "todos os tipos"
+    market_stats = market_summary_query(
+        bairro_market,
+        tipo_market,
+        dimensions["max_date"],
+        db_mtime,
+    )
+    city_stats = (
+        market_stats
+        if bairro_market is None
+        else market_summary_query(
+            None,
+            tipo_market,
+            dimensions["max_date"],
+            db_mtime,
+        )
+    )
+
+    if market_stats.get("current_m2") is None:
+        st.info("Não há dados suficientes para formar uma leitura atual dessa combinação.")
     else:
-        fig = px.line(series, x="mes", y="mediana_m2", markers=True, labels={"mes": "Mês", "mediana_m2": "Mediana por m² cadastral"})
-        fig.update_layout(yaxis_tickprefix="R$ ", hovermode="x unified", margin=dict(l=10, r=10, t=20, b=10))
+        change_12m = market_stats.get("change_12m")
+        q25_m2 = market_stats.get("q25_m2")
+        q75_m2 = market_stats.get("q75_m2")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric(
+            "Valor atual por m²",
+            brl(market_stats["current_m2"], 0),
+            help="Mediana móvel dos três meses mais recentes disponíveis.",
+        )
+        c2.metric(
+            "Variação em 12 meses",
+            f"{change_12m:+.1f}%".replace(".", ",") if change_12m is not None else "—",
+        )
+        c3.metric(
+            "Negócios em 12 meses",
+            number_br(market_stats.get("records_12m", 0)),
+            delta=(
+                f"{market_stats['volume_change_12m']:+.1f}% vs. 12m anteriores".replace(".", ",")
+                if market_stats.get("volume_change_12m") is not None
+                else None
+            ),
+        )
+        c4.metric(
+            "Faixa central por m²",
+            (
+                f"{brl(q25_m2, 0)} – {brl(q75_m2, 0)}"
+                if q25_m2 is not None and q75_m2 is not None
+                else "—"
+            ),
+            help="Intervalo entre o 25º e o 75º percentil dos últimos 12 meses.",
+        )
+
+        reading = market_reading(scope_label, market_stats, city_stats)
+        st.info(f"**O que está acontecendo em {scope_label}**\n\n{reading}")
+        st.caption(
+            f"Leitura de {type_label}. O valor atual por m² usa a mediana dos três meses mais recentes para reduzir oscilações mensais isoladas."
+        )
+
+    st.markdown("---")
+    st.subheader("Evolução do valor por m²")
+    period_choice = st.segmented_control(
+        "Período do gráfico",
+        ["2 anos", "5 anos", "Todo o histórico"],
+        default="2 anos",
+        label_visibility="collapsed",
+        key="market_period",
+    )
+    if period_choice == "2 anos":
+        market_start = max(
+            pd.Timestamp(dimensions["min_date"]),
+            pd.Timestamp(dimensions["max_date"]) - pd.DateOffset(years=2),
+        )
+    elif period_choice == "5 anos":
+        market_start = max(
+            pd.Timestamp(dimensions["min_date"]),
+            pd.Timestamp(dimensions["max_date"]) - pd.DateOffset(years=5),
+        )
+    else:
+        market_start = dimensions["min_date"]
+
+    scope_series = monthly_series(
+        bairro_market,
+        tipo_market,
+        market_start,
+        dimensions["max_date"],
+        db_mtime,
+    )
+    plot_frames = []
+    if not scope_series.empty:
+        scope_plot = scope_series.copy()
+        scope_plot["escopo"] = scope_label
+        plot_frames.append(scope_plot)
+    if bairro_market is not None:
+        city_series = monthly_series(
+            None,
+            tipo_market,
+            market_start,
+            dimensions["max_date"],
+            db_mtime,
+        )
+        if not city_series.empty:
+            city_plot = city_series.copy()
+            city_plot["escopo"] = "Belo Horizonte"
+            plot_frames.append(city_plot)
+
+    if plot_frames:
+        plot_data = pd.concat(plot_frames, ignore_index=True)
+        fig = px.line(
+            plot_data,
+            x="mes",
+            y="mediana_m2_3m",
+            color="escopo",
+            markers=True,
+            labels={
+                "mes": "Mês",
+                "mediana_m2_3m": "Valor por m² cadastral",
+                "escopo": "",
+            },
+        )
+        fig.update_layout(
+            yaxis_tickprefix="R$ ",
+            hovermode="x unified",
+            margin=dict(l=10, r=10, t=20, b=10),
+            legend_title_text="",
+            showlegend=len(plot_frames) > 1,
+        )
         st.plotly_chart(fig, width="stretch")
-        fig2 = px.bar(series, x="mes", y="transacoes", labels={"mes": "Mês", "transacoes": "Transações"})
-        fig2.update_layout(margin=dict(l=10, r=10, t=20, b=10))
-        st.plotly_chart(fig2, width="stretch")
-        st.caption("O gráfico usa o valor de referência — maior entre declarado e base PBH — dividido pela área cadastral municipal. O padrão inicial é Apartamento para evitar misturar tipologias muito diferentes; a opção Todos os tipos continua disponível. As medianas reduzem a influência de valores extremos.")
+        st.caption(
+            "A linha usa a mediana móvel de três meses do valor de referência por m² cadastral. Quando um bairro é selecionado, Belo Horizonte aparece como comparação."
+        )
+    else:
+        st.info("Não há série histórica suficiente para esse recorte.")
+
+    st.markdown("---")
+    st.subheader(f"Quanto custam os imóveis negociados em {scope_label}?")
+    if market_stats.get("median_value") is None:
+        st.info("Não há negócios suficientes nos últimos 12 meses para resumir a faixa de valores.")
+    else:
+        p1, p2, p3 = st.columns(3)
+        p1.metric("25% até", brl(market_stats.get("q25_value")))
+        p2.metric("50% até", brl(market_stats.get("median_value")))
+        p3.metric("75% até", brl(market_stats.get("q75_value")))
+        dist = price_distribution(market_stats)
+        total_dist = int(dist["transacoes"].sum())
+        if total_dist > 0:
+            dist["percentual"] = dist["transacoes"] / total_dist * 100
+            fig_prices = px.bar(
+                dist,
+                x="faixa",
+                y="transacoes",
+                text="transacoes",
+                labels={"faixa": "Faixa de valor", "transacoes": "Transações"},
+            )
+            fig_prices.update_layout(
+                margin=dict(l=10, r=10, t=20, b=10),
+                showlegend=False,
+            )
+            st.plotly_chart(fig_prices, width="stretch")
+        st.caption(
+            "Faixas calculadas com o valor de referência das transações dos últimos 12 meses."
+        )
+
+    snapshot = neighborhood_snapshot_query(
+        tipo_market,
+        dimensions["max_date"],
+        db_mtime,
+    )
+
+    st.markdown("---")
+    st.subheader("Compare bairros")
+    comparison_pool = eligible_neighborhoods(
+        snapshot,
+        min_transactions=5,
+        min_window_transactions=1,
+    )
+    comparison_options = sorted(comparison_pool["bairro"].tolist()) if not comparison_pool.empty else []
+    comparison_defaults: list[str] = []
+    if bairro_market in comparison_options:
+        comparison_defaults.append(bairro_market)
+    if not comparison_pool.empty:
+        for candidate in comparison_pool.sort_values("records_12m", ascending=False)["bairro"].tolist():
+            if candidate not in comparison_defaults:
+                comparison_defaults.append(candidate)
+            if len(comparison_defaults) >= min(3, len(comparison_options)):
+                break
+
+    compare_bairros = st.multiselect(
+        "Escolha até três bairros",
+        comparison_options,
+        default=comparison_defaults,
+        max_selections=3,
+        format_func=smart_title,
+        key="market_compare_bairros",
+    )
+    if compare_bairros:
+        compare_frame = comparison_pool[
+            comparison_pool["bairro"].isin(compare_bairros)
+        ].copy()
+        compare_frame["Bairro"] = compare_frame["bairro"].map(smart_title)
+        compare_frame["R$/m² atual"] = compare_frame["current_m2"].map(lambda value: brl(value, 0))
+        compare_frame["Variação 12m"] = compare_frame["change_12m"].map(
+            lambda value: f"{value:+.1f}%".replace(".", ",") if pd.notna(value) else "—"
+        )
+        compare_frame["Negócios 12m"] = compare_frame["records_12m"].map(lambda value: number_br(value))
+        compare_frame["Área mediana"] = compare_frame["median_area"].map(
+            lambda value: f"{number_br(value, 0)} m²" if pd.notna(value) else "—"
+        )
+        compare_frame["Valor mediano"] = compare_frame["median_value"].map(lambda value: brl(value))
+        st.dataframe(
+            compare_frame[
+                ["Bairro", "R$/m² atual", "Variação 12m", "Negócios 12m", "Área mediana", "Valor mediano"]
+            ],
+            hide_index=True,
+            width="stretch",
+        )
+    else:
+        st.info("Selecione bairros com amostra suficiente para comparar.")
+
+    st.markdown("---")
+    st.subheader("Radar dos bairros")
+    radar_choice = st.segmented_control(
+        "Ranking",
+        ["Maior valor por m²", "Maiores altas em 12 meses", "Mais negócios"],
+        default="Maior valor por m²",
+        label_visibility="collapsed",
+        key="market_radar_metric",
+    )
+    radar_metric = {
+        "Maior valor por m²": "current_m2",
+        "Maiores altas em 12 meses": "change_12m",
+        "Mais negócios": "records_12m",
+    }[radar_choice]
+    ranking = rank_neighborhoods(snapshot, radar_metric, limit=10)
+    if ranking.empty:
+        st.info(
+            "Ainda não há bairros suficientes com amostra mínima para este ranking."
+        )
+    else:
+        ranking = ranking.copy()
+        ranking.insert(0, "#", range(1, len(ranking) + 1))
+        ranking["Bairro"] = ranking["bairro"].map(smart_title)
+        ranking["R$/m² atual"] = ranking["current_m2"].map(lambda value: brl(value, 0))
+        ranking["Variação 12m"] = ranking["change_12m"].map(
+            lambda value: f"{value:+.1f}%".replace(".", ",") if pd.notna(value) else "—"
+        )
+        ranking["Negócios 12m"] = ranking["records_12m"].map(lambda value: number_br(value))
+        st.dataframe(
+            ranking[["#", "Bairro", "R$/m² atual", "Variação 12m", "Negócios 12m"]],
+            hide_index=True,
+            width="stretch",
+        )
+        st.caption(
+            f"Para reduzir distorções de amostras pequenas, os rankings exigem pelo menos {MIN_RADAR_TRANSACTIONS} transações nos últimos 12 meses e cinco negócios na janela atual de três meses. O ranking de altas também exige amostra na janela equivalente de 12 meses atrás."
+        )
+
+    st.markdown("---")
+    st.subheader(f"Perfil dos imóveis negociados em {scope_label}")
+    pr1, pr2, pr3, pr4 = st.columns(4)
+    pr1.metric(
+        "Área cadastral mediana",
+        f"{number_br(market_stats.get('median_area'), 0)} m²" if market_stats.get("median_area") is not None else "—",
+    )
+    pr2.metric("Valor mediano", brl(market_stats.get("median_value")))
+    pr3.metric(
+        "Ano mediano de construção",
+        number_br(market_stats.get("median_year"), 0),
+    )
+    pr4.metric(
+        "Padrão mais frequente",
+        text_or_na(market_stats.get("common_pattern"), "—"),
+    )
+    st.caption(
+        "Perfil resumido das transações dos últimos 12 meses. A área é a área construída cadastrada na PBH."
+    )
+
 
 else:
     st.subheader("Sobre os dados")
@@ -2252,9 +2247,9 @@ else:
 
         **Área cadastrada na PBH:** a área construída exibida na base municipal pode incluir proporcionalmente áreas comuns e garagem e não corresponde necessariamente à área privativa informada em anúncios. Por isso, o app identifica o indicador como **valor por m² cadastral**.
 
-        Na aba **Avaliar**, a forma mais segura de usar a área é localizar uma transação do próprio imóvel na aba **Transações** e tocar em **Avaliar este imóvel**. Assim, área, padrão, ano e tipo são carregados diretamente da base.
+        Na aba **Avaliar**, a forma recomendada é localizar uma transação do próprio imóvel. Assim, área, padrão, ano, tipo e valor histórico são carregados diretamente da base. O preenchimento manual fica disponível quando o imóvel não é localizado.
 
-        O app possui dois métodos de avaliação: **comparação com transações recentes** e **estimativa híbrida de um valor antigo**. Para apartamentos, a estimativa híbrida confronta a evolução do **FipeZAP Belo Horizonte**, comparáveis atuais da PBH e, quando disponíveis, transações do mesmo endereço trazidas ao período atual. As fontes são complementares: as referências locais também podem usar o FipeZAP apenas para normalização temporal.
+        A estimativa confronta referências complementares. Para apartamentos, usa a evolução do **FipeZAP Belo Horizonte** como âncora temporal, comparáveis atuais da PBH e, quando disponíveis, transações do mesmo endereço trazidas ao período atual. Os imóveis efetivamente usados nas referências podem ser consultados no próprio resultado. As referências locais também podem usar o FipeZAP apenas para normalização temporal.
 
         As avaliações são **referências estatísticas** e não substituem laudo técnico.
 

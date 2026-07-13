@@ -1,0 +1,40 @@
+Quanto Vale BH — validação 2026-07-13
+
+RESULTADO
+- 44 testes aprovados em 8,51 s.
+- Compilação integral Python aprovada (compileall).
+- Ruff F/E9 aprovado: sem nomes indefinidos, imports ausentes ou erros sintáticos críticos cobertos por essas regras.
+- Ambiente virtual limpo com requirements.txt: pip check sem dependências quebradas.
+
+COBERTURA NOVA
+- Exclusão da transação de origem por registro_id.
+- Exclusão de cópia equivalente por chave_tecnica.
+- Preservação de outras transações legítimas do mesmo endereço.
+- Transporte dos identificadores até o avaliador híbrido.
+- Fluxo manual sem exclusões de origem.
+- Tokens crescentes de rolagem em cálculos consecutivos.
+- Consumo único do token de rolagem.
+- Três avaliações consecutivas gerando tokens 1, 2 e 3.
+- Substituição de token pendente por cálculo mais recente.
+- Janelas de mercado de 3 e 12 meses.
+- Variação percentual e tratamento de base zero.
+- Mediana móvel de 3 meses.
+- Indicadores de mercado, volume, quartis, perfil e faixas de preço.
+- Respeito ao filtro de bairro.
+- Série mensal e suavização.
+- Snapshot por bairro.
+- Filtro de amostra mínima dos rankings.
+- Ranking por valor/m², variação e volume.
+- Distribuição por faixa de preço.
+- Texto automático de leitura de mercado.
+- Streamlit AppTest: fluxo único de avaliação.
+- Streamlit AppTest: duas avaliações sucessivas e marcadores de rolagem distintos.
+- Streamlit AppTest: ausência da origem na amostra após avaliação selecionada.
+- Streamlit AppTest: avaliação manual.
+- Streamlit AppTest: botão Ver mais semelhantes e filtros pré-preenchidos em Transações.
+- Streamlit AppTest: todos os blocos da nova aba Mercado.
+- Streamlit AppTest: filtro por bairro e período de 5 anos.
+- Streamlit AppTest: navegação Avaliar, Transações, Mercado e Sobre sem exceções.
+
+LIMITAÇÃO DE TESTE
+A execução JavaScript do scroll suave no navegador real não pôde ser automatizada no ambiente de validação porque o navegador headless bloqueou acesso ao servidor local. A lógica de disparo foi validada por AppTest com duas avaliações sucessivas, tokens distintos e marcadores DOM distintos. O scroll agora usa st.html com JavaScript no documento principal, em vez do iframe antigo.

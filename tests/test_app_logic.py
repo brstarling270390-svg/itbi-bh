@@ -2,11 +2,13 @@ import duckdb
 import pandas as pd
 
 from app_logic import (
-    HYBRID_SCROLL_FLAG,
+    HYBRID_SCROLL_PENDING,
+    HYBRID_SCROLL_SEQUENCE,
     comparable_source_exclusions,
     consume_hybrid_scroll,
     evaluate_selected_transaction,
     exclude_source_rows,
+    next_hybrid_scroll_token,
     selected_source_identifiers,
     store_hybrid_result,
 )
@@ -27,16 +29,12 @@ def _filtered_ids(*, registro_id=None, chave_tecnica=None):
                 ("outra", "chave-outra", "RUA TESTE 20 - AP 301"),
             ],
         )
-        clauses, params = comparable_source_exclusions(
-            registro_id,
-            chave_tecnica,
-        )
+        clauses, params = comparable_source_exclusions(registro_id, chave_tecnica)
         where = " AND ".join(["TRUE", *clauses])
         return {
             row[0]
             for row in con.execute(
-                f"SELECT registro_id FROM rows WHERE {where}",
-                params,
+                f"SELECT registro_id FROM rows WHERE {where}", params
             ).fetchall()
         }
     finally:
@@ -51,8 +49,7 @@ def test_excludes_source_transaction_by_registro_id():
 
 def test_excludes_equivalent_copy_by_chave_tecnica():
     remaining = _filtered_ids(
-        registro_id="origem",
-        chave_tecnica="chave-origem",
+        registro_id="origem", chave_tecnica="chave-origem"
     )
     assert "origem" not in remaining
     assert "copia" not in remaining
@@ -60,8 +57,7 @@ def test_excludes_equivalent_copy_by_chave_tecnica():
 
 def test_preserves_legitimate_transactions_from_same_address():
     remaining = _filtered_ids(
-        registro_id="origem",
-        chave_tecnica="chave-origem",
+        registro_id="origem", chave_tecnica="chave-origem"
     )
     assert "legitima" in remaining
     assert "outra" in remaining
@@ -74,10 +70,9 @@ def test_without_source_identifiers_preserves_existing_query_behavior():
 
 
 def test_selected_transaction_identifiers_reach_local_and_building_exclusions():
-    selected = pd.Series({
-        "registro_id": "origem",
-        "chave_tecnica": "chave-origem",
-    })
+    selected = pd.Series(
+        {"registro_id": "origem", "chave_tecnica": "chave-origem"}
+    )
     identifiers = selected_source_identifiers(selected)
 
     assert identifiers == {
@@ -107,10 +102,9 @@ def test_selected_transaction_identifiers_reach_hybrid_evaluator():
         captured.update(kwargs)
         return "resultado"
 
-    selected = pd.Series({
-        "registro_id": "origem",
-        "chave_tecnica": "chave-origem",
-    })
+    selected = pd.Series(
+        {"registro_id": "origem", "chave_tecnica": "chave-origem"}
+    )
     result = evaluate_selected_transaction(
         fake_hybrid_evaluator,
         selected,
@@ -144,26 +138,58 @@ def test_manual_flow_keeps_all_rows_without_source_identifiers():
     assert filtered["registro_id"].tolist() == ["uma", "duas"]
 
 
-def test_successful_hybrid_result_requests_scroll():
+def test_successful_hybrid_result_requests_first_scroll_token():
     state = {}
-    store_hybrid_result(
+    token = store_hybrid_result(
         state,
         local_rows="locais",
         building_rows="predio",
         stats={"estimated": 700_000},
         subject={"source_transaction": False},
     )
-    assert state[HYBRID_SCROLL_FLAG] is True
+    assert token == 1
+    assert state[HYBRID_SCROLL_SEQUENCE] == 1
+    assert state[HYBRID_SCROLL_PENDING] == 1
     assert state["hybrid_stats"]["estimated"] == 700_000
 
 
-def test_hybrid_scroll_flag_is_consumed_once():
-    state = {HYBRID_SCROLL_FLAG: True}
-    assert consume_hybrid_scroll(state) is True
-    assert HYBRID_SCROLL_FLAG not in state
-    assert consume_hybrid_scroll(state) is False
+def test_hybrid_scroll_token_is_consumed_once():
+    state = {HYBRID_SCROLL_SEQUENCE: 1, HYBRID_SCROLL_PENDING: 1}
+    assert consume_hybrid_scroll(state) == 1
+    assert HYBRID_SCROLL_PENDING not in state
+    assert consume_hybrid_scroll(state) is None
+    assert state[HYBRID_SCROLL_SEQUENCE] == 1
+
+
+def test_three_consecutive_hybrid_results_get_distinct_scroll_tokens():
+    state = {}
+    seen = []
+    for estimated in (700_000, 750_000, 810_000):
+        token = store_hybrid_result(
+            state,
+            local_rows="locais",
+            building_rows="predio",
+            stats={"estimated": estimated},
+            subject={"source_transaction": True},
+        )
+        seen.append((token, consume_hybrid_scroll(state)))
+
+    assert seen == [(1, 1), (2, 2), (3, 3)]
+    assert state[HYBRID_SCROLL_SEQUENCE] == 3
+    assert state["hybrid_stats"]["estimated"] == 810_000
+
+
+def test_new_calculation_replaces_unconsumed_pending_token_with_newer_one():
+    state = {}
+    assert next_hybrid_scroll_token(state) == 1
+    assert next_hybrid_scroll_token(state) == 2
+    assert consume_hybrid_scroll(state) == 2
+    assert consume_hybrid_scroll(state) is None
 
 
 def test_normal_rerun_does_not_request_scroll():
-    state = {"hybrid_stats": {"estimated": 700_000}}
-    assert consume_hybrid_scroll(state) is False
+    state = {
+        "hybrid_stats": {"estimated": 700_000},
+        HYBRID_SCROLL_SEQUENCE: 4,
+    }
+    assert consume_hybrid_scroll(state) is None
