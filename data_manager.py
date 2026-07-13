@@ -2,13 +2,26 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import unicodedata
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Iterable
+from uuid import uuid4
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - indisponível no Windows
+    fcntl = None
+
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover - indisponível em Linux/macOS
+    msvcrt = None
 
 import duckdb
 import pandas as pd
@@ -28,6 +41,7 @@ DEMO_PATH = DATA_DIR / "demo_itbi.csv"
 FIPEZAP_BH_PATH = DATA_DIR / "fipezap_bh.csv"
 FIPEZAP_SERIES_URL = "https://downloads.fipe.org.br/indices/fipezap/fipezap-serieshistoricas.xlsx"
 FIPEZAP_SOURCE_URL = "https://www.fipe.org.br/pt-br/indices/fipezap/"
+UPDATE_LOCK_PATH = DATA_DIR / ".pbh_update.lock"
 
 CANONICAL_COLUMNS = [
     "endereco",
@@ -107,6 +121,60 @@ class Resource:
     modified: str | None
     size: int | None
     hash_value: str | None
+
+
+class DatabaseUpdateInProgressError(RuntimeError):
+    """Indica que outra sessão já está reconstruindo a base da PBH."""
+
+
+@contextmanager
+def database_update_lock(
+    lock_path: Path | None = None,
+):
+    """Garante uma única reconstrução da base PBH por vez entre sessões/processos."""
+    target = lock_path or UPDATE_LOCK_PATH
+    target.parent.mkdir(parents=True, exist_ok=True)
+    handle = target.open("a+", encoding="utf-8")
+
+    try:
+        if fcntl is not None:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        elif msvcrt is not None:  # pragma: no cover - exercitado no Windows
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write("0")
+                handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:  # pragma: no cover - plataformas Python sem lock de arquivo suportado
+            raise RuntimeError("O sistema não oferece mecanismo de lock de arquivo suportado.")
+    except (BlockingIOError, OSError):
+        handle.close()
+        raise DatabaseUpdateInProgressError(
+            "A base da PBH já está sendo atualizada em outra sessão. "
+            "Aguarde a conclusão e tente novamente."
+        ) from None
+
+    handle.seek(0)
+    handle.truncate()
+    json.dump(
+        {
+            "pid": os.getpid(),
+            "started_at": datetime.now().isoformat(timespec="seconds"),
+        },
+        handle,
+    )
+    handle.flush()
+
+    try:
+        yield
+    finally:
+        if fcntl is not None:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        elif msvcrt is not None:  # pragma: no cover - exercitado no Windows
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        handle.close()
 
 
 def normalize_text(value: object) -> str:
@@ -364,96 +432,101 @@ def build_database(
     minimum_records: int = 1000,
 ) -> dict:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    temp_db = DB_PATH.with_suffix(".tmp.duckdb")
-    for suffix in ["", ".wal"]:
-        candidate = Path(str(temp_db) + suffix)
-        if candidate.exists():
-            candidate.unlink()
-
-    connection = duckdb.connect(str(temp_db))
-    _create_schema(connection)
+    temp_db = DB_PATH.parent / (
+        f".{DB_PATH.stem}.{uuid4().hex}.tmp{DB_PATH.suffix}"
+    )
     total_files = len(paths)
     total_rows = 0
     if len(resources) != len(paths):
         raise ValueError("A quantidade de recursos não corresponde à quantidade de arquivos.")
 
+    connection = duckdb.connect(str(temp_db))
     try:
-        for file_index, (resource, path) in enumerate(zip(resources, paths), 1):
-            if progress_callback:
-                progress_callback(file_index - 1, total_files, f"Processando {resource.name}")
-            encoding, delimiter = _guess_csv_settings(path)
-            read_kwargs = dict(
-                sep=delimiter,
-                dtype=str,
-                chunksize=50_000,
-                encoding=encoding,
-                on_bad_lines="error",
-                low_memory=False,
-            )
-            row_offset = 0
-            first_chunk = True
-            for chunk in pd.read_csv(path, **read_kwargs):
-                if first_chunk:
-                    validate_source_schema(chunk.columns, resource)
-                    first_chunk = False
-                normalized = normalize_chunk(chunk, resource, row_offset=row_offset)
-                connection.register("incoming_chunk", normalized)
-                connection.execute("INSERT INTO transactions SELECT * FROM incoming_chunk")
-                total_rows += len(normalized)
-                row_offset += len(normalized)
-                connection.unregister("incoming_chunk")
-            if progress_callback:
-                progress_callback(file_index, total_files, f"Processado: {resource.name}")
+        try:
+            _create_schema(connection)
+            for file_index, (resource, path) in enumerate(zip(resources, paths), 1):
+                if progress_callback:
+                    progress_callback(file_index - 1, total_files, f"Processando {resource.name}")
+                encoding, delimiter = _guess_csv_settings(path)
+                read_kwargs = dict(
+                    sep=delimiter,
+                    dtype=str,
+                    chunksize=50_000,
+                    encoding=encoding,
+                    on_bad_lines="error",
+                    low_memory=False,
+                )
+                row_offset = 0
+                first_chunk = True
+                for chunk in pd.read_csv(path, **read_kwargs):
+                    if first_chunk:
+                        validate_source_schema(chunk.columns, resource)
+                        first_chunk = False
+                    normalized = normalize_chunk(chunk, resource, row_offset=row_offset)
+                    connection.register("incoming_chunk", normalized)
+                    connection.execute("INSERT INTO transactions SELECT * FROM incoming_chunk")
+                    total_rows += len(normalized)
+                    row_offset += len(normalized)
+                    connection.unregister("incoming_chunk")
+                if progress_callback:
+                    progress_callback(file_index, total_files, f"Processado: {resource.name}")
+    
+            connection.execute("CREATE INDEX idx_bairro ON transactions(bairro)")
+            connection.execute("CREATE INDEX idx_data ON transactions(data_quitacao)")
+            connection.execute("CREATE INDEX idx_tipo ON transactions(tipo_construtivo)")
+            connection.execute("CREATE INDEX idx_chave ON transactions(chave_tecnica)")
+            stats = connection.execute(
+                """
+                SELECT
+                    COUNT(*) AS registros,
+                    MIN(data_quitacao) AS data_inicial,
+                    MAX(data_quitacao) AS data_final,
+                    COUNT(DISTINCT bairro) AS bairros,
+                    COUNT(*) FILTER (WHERE data_quitacao IS NOT NULL) AS datas_validas,
+                    COUNT(*) FILTER (WHERE endereco IS NOT NULL AND TRIM(endereco) <> '') AS enderecos_validos,
+                    COUNT(*) FILTER (WHERE GREATEST(COALESCE(valor_declarado, 0), COALESCE(valor_base_calculo, 0)) > 0) AS valores_validos
+                FROM transactions
+                """
+            ).fetchone()
+    
+            record_count = int(stats[0] or 0)
+            if record_count < minimum_records:
+                raise RuntimeError(
+                    f"A atualização produziu apenas {record_count} registros; o mínimo esperado para esta carga é {minimum_records}. "
+                    "A carga foi rejeitada para evitar substituir a base por um conjunto incompleto."
+                )
+    
+            quality_checks = {
+                "datas de quitação válidas": int(stats[4] or 0) / record_count,
+                "endereços válidos": int(stats[5] or 0) / record_count,
+                "valores de referência positivos": int(stats[6] or 0) / record_count,
+            }
+            failed = [
+                f"{name} ({ratio:.1%})"
+                for name, ratio in quality_checks.items()
+                if ratio < 0.50
+            ]
+            if failed:
+                raise RuntimeError(
+                    "A qualidade da carga ficou abaixo do mínimo esperado: "
+                    + "; ".join(failed)
+                    + ". A base anterior foi preservada."
+                )
+    
+            connection.execute("CHECKPOINT")
+        finally:
+            connection.close()
 
-        connection.execute("CREATE INDEX idx_bairro ON transactions(bairro)")
-        connection.execute("CREATE INDEX idx_data ON transactions(data_quitacao)")
-        connection.execute("CREATE INDEX idx_tipo ON transactions(tipo_construtivo)")
-        connection.execute("CREATE INDEX idx_chave ON transactions(chave_tecnica)")
-        stats = connection.execute(
-            """
-            SELECT
-                COUNT(*) AS registros,
-                MIN(data_quitacao) AS data_inicial,
-                MAX(data_quitacao) AS data_final,
-                COUNT(DISTINCT bairro) AS bairros,
-                COUNT(*) FILTER (WHERE data_quitacao IS NOT NULL) AS datas_validas,
-                COUNT(*) FILTER (WHERE endereco IS NOT NULL AND TRIM(endereco) <> '') AS enderecos_validos,
-                COUNT(*) FILTER (WHERE GREATEST(COALESCE(valor_declarado, 0), COALESCE(valor_base_calculo, 0)) > 0) AS valores_validos
-            FROM transactions
-            """
-        ).fetchone()
-
-        record_count = int(stats[0] or 0)
-        if record_count < minimum_records:
-            raise RuntimeError(
-                f"A atualização produziu apenas {record_count} registros; o mínimo esperado para esta carga é {minimum_records}. "
-                "A carga foi rejeitada para evitar substituir a base por um conjunto incompleto."
-            )
-
-        quality_checks = {
-            "datas de quitação válidas": int(stats[4] or 0) / record_count,
-            "endereços válidos": int(stats[5] or 0) / record_count,
-            "valores de referência positivos": int(stats[6] or 0) / record_count,
-        }
-        failed = [
-            f"{name} ({ratio:.1%})"
-            for name, ratio in quality_checks.items()
-            if ratio < 0.50
-        ]
-        if failed:
-            raise RuntimeError(
-                "A qualidade da carga ficou abaixo do mínimo esperado: "
-                + "; ".join(failed)
-                + ". A base anterior foi preservada."
-            )
-
-        connection.execute("CHECKPOINT")
+        # Substituição atômica: reduz a janela em que outra sessão poderia encontrar
+        # o banco ausente durante uma atualização.
+        temp_db.replace(DB_PATH)
     finally:
-        connection.close()
-
-    # Substituição atômica: reduz a janela em que outra sessão poderia encontrar
-    # o banco ausente durante uma atualização.
-    temp_db.replace(DB_PATH)
+        for suffix in ["", ".wal"]:
+            candidate = Path(str(temp_db) + suffix)
+            try:
+                candidate.unlink()
+            except FileNotFoundError:
+                pass
 
     metadata = {
         "dataset_id": DATASET_ID,
@@ -474,18 +547,19 @@ def build_database(
 
 
 def update_from_pbh(progress_callback=None, force_download: bool = False, include_historical: bool = True) -> dict:
-    package = fetch_package_metadata()
-    resources = select_csv_resources(package, include_historical=include_historical)
-    if not resources:
-        raise RuntimeError("O catálogo da PBH não retornou arquivos CSV do ITBI.")
-    paths = download_resources(resources, progress_callback=progress_callback, force=force_download)
-    metadata = build_database(resources, paths, progress_callback=progress_callback)
-    metadata["escopo"] = "historico_completo" if include_historical else "base_recente"
-    _atomic_write_text(
-        METADATA_PATH,
-        json.dumps(metadata, ensure_ascii=False, indent=2),
-    )
-    return metadata
+    with database_update_lock():
+        package = fetch_package_metadata()
+        resources = select_csv_resources(package, include_historical=include_historical)
+        if not resources:
+            raise RuntimeError("O catálogo da PBH não retornou arquivos CSV do ITBI.")
+        paths = download_resources(resources, progress_callback=progress_callback, force=force_download)
+        metadata = build_database(resources, paths, progress_callback=progress_callback)
+        metadata["escopo"] = "historico_completo" if include_historical else "base_recente"
+        _atomic_write_text(
+            METADATA_PATH,
+            json.dumps(metadata, ensure_ascii=False, indent=2),
+        )
+        return metadata
 
 
 

@@ -19,6 +19,7 @@ from app_logic import (
 )
 from data_manager import (
     DB_PATH,
+    DatabaseUpdateInProgressError,
     FIPEZAP_BH_PATH,
     FIPEZAP_SOURCE_URL,
     TYPE_LABELS,
@@ -411,6 +412,9 @@ def run_update(force: bool = False, include_historical: bool = False) -> None:
             )
         st.cache_data.clear()
         st.rerun()
+    except DatabaseUpdateInProgressError as exc:
+        progress.empty()
+        st.warning(str(exc))
     except Exception as exc:  # noqa: BLE001
         progress.empty()
         st.error(f"A atualização não foi concluída: {exc}")

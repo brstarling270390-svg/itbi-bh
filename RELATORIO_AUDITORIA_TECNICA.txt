@@ -131,3 +131,35 @@ O provisionamento ficou parado em "Processing dependencies" após "Resolved 48 p
 A dependência foi corrigida para pandas==2.3.3, que possui wheels oficiais para CPython 3.14.
 O conjunto de dependências foi resolvido para alvo Python 3.14/Linux e instalado em ambiente isolado.
 Os 13 testes automatizados passaram novamente com pandas 2.3.3.
+
+
+ADENDO — CORREÇÃO DE CONCORRÊNCIA NA ATUALIZAÇÃO — 13/07/2026
+
+ERRO OBSERVADO EM PRODUÇÃO
+Ao ativar o histórico completo, uma sessão recebeu:
+Catalog Error: Table with name "transactions" already exists!
+
+CAUSA
+A reconstrução usava um nome fixo para o banco temporário. Duas sessões/processos podiam
+iniciar a atualização simultaneamente e disputar o mesmo arquivo DuckDB temporário.
+
+CORREÇÃO
+- update_from_pbh agora é protegido por lock de arquivo do sistema operacional, não bloqueante;
+- Linux/macOS usam flock e Windows usa msvcrt.locking;
+- o lock é liberado automaticamente com o fechamento do descritor/processo;
+- uma segunda tentativa simultânea recebe aviso amigável para aguardar;
+- cada reconstrução usa um nome temporário exclusivo baseado em UUID;
+- bancos temporários são removidos também quando a reconstrução falha;
+- a base principal continua sendo substituída somente após carga e verificações concluídas.
+
+VALIDAÇÕES DESTA CORREÇÃO
+- compilação Python: APROVADA;
+- suíte completa: 27 testes aprovados;
+- teste de segunda sessão durante lock ativo: APROVADO;
+- teste de nova aquisição do lock após liberação: APROVADO;
+- teste de duas chamadas concorrentes a update_from_pbh: segunda chamada rejeitada de forma controlada;
+- teste de falha de reconstrução: banco principal preservado e banco temporário exclusivo removido;
+- servidor Streamlit real iniciado e endpoint /_stcore/health retornou "ok".
+
+A metodologia de avaliação, FipeZAP, pesos, confiança, janelas temporais e seleção de comparáveis
+não foram alterados nesta correção.

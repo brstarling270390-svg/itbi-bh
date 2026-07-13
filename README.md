@@ -46,6 +46,8 @@ A estimativa central é a mediana das referências disponíveis. A ferramenta é
 - Linhas CSV malformadas provocam erro explícito; não são descartadas silenciosamente.
 - Cargas com volume ou qualidade incompatíveis com a base esperada são rejeitadas, preservando o banco anterior.
 - A substituição do banco e da série FipeZAP é feita por arquivo temporário e troca atômica.
+- Cada reconstrução usa um banco temporário exclusivo.
+- Um lock de arquivo do sistema operacional impede duas sessões/processos de reconstruírem a base PBH ao mesmo tempo; uma segunda tentativa recebe aviso para aguardar.
 - A atualização manual força o novo download dos recursos, inclusive quando a PBH corrige um arquivo já publicado.
 
 ## Fontes
