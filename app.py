@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from urllib.parse import quote_plus
 import html
 import re
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+import streamlit.components.v1 as components
 
 from data_manager import (
     DB_PATH,
@@ -272,6 +274,30 @@ REFERENCE_M2_SQL = f"""
 """
 
 
+
+def scroll_to_result(marker_id: str) -> None:
+    """Rola suavemente a página principal até o marcador do resultado."""
+    components.html(
+        f"""
+        <script>
+        const markerId = "{marker_id}";
+        let attempts = 0;
+        function goToResult() {{
+            const marker = window.parent.document.getElementById(markerId);
+            if (!marker) return false;
+            marker.scrollIntoView({{behavior: "smooth", block: "start"}});
+            return true;
+        }}
+        const timer = setInterval(() => {{
+            attempts += 1;
+            if (goToResult() || attempts >= 40) clearInterval(timer);
+        }}, 100);
+        </script>
+        """,
+        height=0,
+        width=0,
+    )
+
 def building_address_key(endereco: object) -> str:
     """Retorna o endereço-base do edifício/imóvel, sem complemento da unidade."""
     raw = "" if endereco is None or pd.isna(endereco) else str(endereco).strip()
@@ -321,6 +347,29 @@ def address_header(endereco: object, bairro: object, date_value: object, kind: o
         f'<div class="address-title">{title}</div>'
         f'<div class="address-meta">{neighborhood} · {date_text} · {kind_text}</div>',
         unsafe_allow_html=True,
+    )
+
+
+def google_maps_url(endereco: object, bairro: object) -> str:
+    """Monta uma pesquisa textual do endereço no Google Maps."""
+    raw = "" if endereco is None or pd.isna(endereco) else str(endereco).strip()
+    base_address = re.split(r"\s+-\s+", raw, maxsplit=1)[0].strip()
+    neighborhood = "" if bairro is None or pd.isna(bairro) else str(bairro).strip()
+    query = ", ".join(
+        part
+        for part in [base_address, neighborhood, "Belo Horizonte", "MG", "Brasil"]
+        if part
+    )
+    return f"https://www.google.com/maps/search/?api=1&query={quote_plus(query)}"
+
+
+def maps_button(endereco: object, bairro: object, *, key: str | None = None) -> None:
+    """Exibe um link discreto para pesquisar o endereço no Google Maps."""
+    st.link_button(
+        "📍 Abrir no Google Maps",
+        google_maps_url(endereco, bairro),
+        width="stretch",
+        help="Abre uma pesquisa textual do endereço; a localização exibida pelo Google pode exigir conferência.",
     )
 
 
@@ -1217,8 +1266,16 @@ if screen == "Avaliar":
                         "ano": int(ano) if ano is not None else None,
                         "source_transaction": None,
                     }
+                    st.session_state["_scroll_recent_result"] = True
 
         if "last_valuation" in st.session_state:
+            st.markdown(
+                '<div id="recent-result-anchor"></div>',
+                unsafe_allow_html=True,
+            )
+            if st.session_state.pop("_scroll_recent_result", False):
+                scroll_to_result("recent-result-anchor")
+
             stats = st.session_state["last_valuation"]
             comparables = st.session_state["last_comparables"]
             subject = st.session_state["last_subject"]
@@ -1344,6 +1401,7 @@ if screen == "Avaliar":
                         f'</div>',
                         unsafe_allow_html=True,
                     )
+                    maps_button(row["endereco"], row["bairro"])
 
     else:
         st.caption(
@@ -1459,6 +1517,7 @@ if screen == "Avaliar":
                             f'</div>',
                             unsafe_allow_html=True,
                         )
+                        maps_button(row["endereco"], row["bairro"])
 
                         if st.button(
                             "Estimar valor atual deste imóvel",
@@ -1518,6 +1577,7 @@ if screen == "Avaliar":
                                     "source_transaction": True,
                                     "source_address": row["endereco"],
                                 }
+                                st.session_state["_scroll_hybrid_result"] = True
                                 st.rerun()
 
         else:
@@ -1668,6 +1728,13 @@ if screen == "Avaliar":
                         }
 
         if "hybrid_stats" in st.session_state:
+            st.markdown(
+                '<div id="hybrid-result-anchor"></div>',
+                unsafe_allow_html=True,
+            )
+            if st.session_state.pop("_scroll_hybrid_result", False):
+                scroll_to_result("hybrid-result-anchor")
+
             stats = st.session_state["hybrid_stats"]
             local_rows = st.session_state["hybrid_local"]
             building_rows = st.session_state["hybrid_building"]
@@ -1804,6 +1871,7 @@ if screen == "Avaliar":
                                 "Por m² cadastral",
                                 brl(row["valor_m2_referencia"], 2),
                             )
+                            maps_button(row["endereco"], row["bairro"])
 
             if not building_rows.empty:
                 with st.expander("Ver transações do mesmo endereço atualizadas"):
@@ -1831,6 +1899,7 @@ if screen == "Avaliar":
                                 f"Área cadastral PBH: {number_br(row['area_construida'], 2)} m² · "
                                 f"fator FipeZAP aplicado: {number_br(row['fator_fipe'], 4)}"
                             )
+                            maps_button(row["endereco"], row["bairro"])
 
 elif screen == "Transações":
     building_selected = st.session_state.get("building_selected")
@@ -1892,6 +1961,7 @@ elif screen == "Transações":
                         f'</div>',
                         unsafe_allow_html=True,
                     )
+                    maps_button(row["endereco"], row["bairro"])
 
     else:
         st.subheader("Pesquisar transações")
@@ -2010,6 +2080,7 @@ elif screen == "Transações":
                         f'</div>',
                         unsafe_allow_html=True,
                     )
+                    maps_button(row["endereco"], row["bairro"])
 
                     b1, b2 = st.columns(2)
 

@@ -56,3 +56,19 @@ A estimativa central é a mediana das referências disponíveis. A ferramenta é
 ## Limitação da hospedagem atual
 
 O Streamlit Community Cloud não garante persistência do armazenamento local. Se a instância for recriada, a base recente é recomposta automaticamente; a pesquisa histórica pode exigir nova carga do histórico completo desde 2008.
+
+
+## Link para Google Maps
+
+Os cartões de imóveis agora incluem o botão **Abrir no Google Maps**.
+
+O link usa uma pesquisa textual com o endereço-base, bairro, Belo Horizonte e MG. Foi incluído em:
+
+- comparáveis recentes da avaliação;
+- busca de transação antiga;
+- comparáveis PBH da estimativa híbrida;
+- transações do mesmo endereço usadas na estimativa híbrida;
+- consulta de transações;
+- tela de transações do mesmo endereço.
+
+O aplicativo não trata o resultado do Google Maps como coordenada oficial ou localização exata; o usuário deve conferir o local aberto pelo serviço.
