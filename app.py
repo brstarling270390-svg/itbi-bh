@@ -294,23 +294,41 @@ REFERENCE_M2_SQL = f"""
 
 
 
-def scroll_to_result(marker_id: str) -> None:
-    """Rola suavemente a página até um marcador único de resultado."""
+
+
+def scroll_to_result(scroll_token: int) -> None:
+    """Força uma nova montagem do script de rolagem a cada cálculo."""
+    token = int(scroll_token)
+    if token <= 0:
+        raise ValueError("O token de rolagem deve ser positivo.")
+
+    marker_id = f"hybrid-result-anchor-{token}"
+
+    # st.html pode preservar a mesma posição de elemento entre reruns.
+    # Ao avançar um slot por cálculo, o script final sempre nasce em uma
+    # nova posição da árvore do Streamlit e volta a executar no navegador.
+    for slot in range(1, token):
+        st.html(
+            f'<span data-qvbh-scroll-slot="{slot}" hidden></span>',
+            width="content",
+        )
+
     st.html(
         f"""
         <script>
         const markerId = "{marker_id}";
         let attempts = 0;
-        function goToResult() {{
+        function goToResult(behavior = "smooth") {{
             const marker = document.getElementById(markerId);
             if (!marker) return false;
-            marker.scrollIntoView({{behavior: "smooth", block: "start"}});
+            marker.scrollIntoView({{behavior, block: "start"}});
             return true;
         }}
-        const timer = setInterval(() => {{
+        const timer = window.setInterval(() => {{
             attempts += 1;
-            if (goToResult() || attempts >= 40) clearInterval(timer);
+            if (goToResult() || attempts >= 40) window.clearInterval(timer);
         }}, 100);
+        window.setTimeout(() => goToResult("auto"), 650);
         </script>
         """,
         width="content",
@@ -1497,7 +1515,7 @@ if screen == "Avaliar":
             unsafe_allow_html=True,
         )
         if scroll_token is not None:
-            scroll_to_result(f"hybrid-result-anchor-{scroll_token}")
+            scroll_to_result(scroll_token)
 
         stats = st.session_state["hybrid_stats"]
         local_rows = st.session_state["hybrid_local"]

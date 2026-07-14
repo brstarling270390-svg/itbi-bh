@@ -46,3 +46,32 @@ REGRESSÕES ANTERIORES MANTIDAS
 
 LIMITAÇÃO REMANESCENTE DE TESTE
 A execução visual do movimento de scroll suave em Chromium real continua sem automação de navegador no ambiente de validação. A lógica de disparo segue coberta por AppTest com avaliações sucessivas, tokens distintos e marcadores DOM distintos.
+
+CORREÇÃO ADICIONAL — ROLAGEM EM AVALIAÇÕES CONSECUTIVAS
+Relato reproduzido funcionalmente pelo estado da aplicação: a primeira avaliação solicitava rolagem, mas a segunda reutilizava a mesma posição do elemento st.html na árvore do Streamlit. A versão anterior alterava token e id do marcador, porém continuava emitindo o JavaScript no mesmo slot de renderização. Os testes anteriores verificavam a troca do token e do marcador, mas não verificavam que o navegador recebia o script em uma nova posição de montagem.
+
+NOVA ESTRATÉGIA
+1. Cada cálculo continua recebendo token crescente.
+2. O marcador de resultado continua único por cálculo.
+3. Para o token N, o app emite N-1 elementos HTML inertes e monta o script de rolagem no N-ésimo slot.
+4. Assim, o script da avaliação seguinte não apenas muda de conteúdo: ele nasce em uma nova posição da árvore do Streamlit.
+5. O script tenta localizar o marcador durante até 4 segundos e faz uma correção final de posição após 650 ms, para acomodar alterações de layout durante a animação.
+6. Reruns normais sem novo cálculo não montam script de rolagem.
+
+TESTES NOVOS DE REGRESSÃO DA ROLAGEM
+- Primeira avaliação: exatamente 1 elemento HTML de rolagem, com JavaScript apontando para hybrid-result-anchor-1.
+- Segunda avaliação consecutiva: primeiro slot inerte + novo script no segundo slot, apontando para hybrid-result-anchor-2.
+- Terceira avaliação consecutiva: dois slots inertes + novo script no terceiro slot, apontando para hybrid-result-anchor-3.
+- Rerun normal após resultado: nenhum script de rolagem é remontado.
+- Mudança Avaliar → Mercado → Avaliar: não provoca nova rolagem sem cálculo.
+- Sequência de avaliação por imóvel selecionado seguida de avaliação manual: token avança e o segundo script nasce em novo slot.
+
+RESULTADO APÓS A CORREÇÃO
+- 58 testes aprovados.
+- Suíte completa executada três vezes com 58 testes aprovados em execuções completas independentes (16,56 s; 17,47 s; 17,37 s).
+- Compilação integral Python aprovada.
+- Ruff completo aprovado nos arquivos da aplicação e testes.
+- As versões das seis dependências diretas instaladas coincidem exatamente com requirements.txt: Streamlit 1.59.1, pandas 2.3.3, DuckDB 1.5.4, requests 2.32.5, Plotly 6.5.2 e openpyxl 3.1.5.
+
+LIMITAÇÃO DE VALIDAÇÃO VISUAL
+O Chromium disponível no ambiente bloqueia acesso HTTP ao servidor local com ERR_BLOCKED_BY_ADMINISTRATOR. Portanto, não foi possível medir window.scrollY em navegador real. A nova regressão é validada no Streamlit AppTest pela própria árvore de saída HTML: o script muda efetivamente de slot de montagem em cada avaliação consecutiva, que era o ponto não coberto pela correção anterior.
