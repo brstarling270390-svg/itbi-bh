@@ -1,3 +1,6 @@
+NOTA DE ATUALIZAÇÃO — 14/07/2026
+Este relatório registra uma auditoria histórica anterior. A validação mais recente da versão com Mercado, resultado em modal e GPS está em RELATORIO_TESTES_2026-07-14.txt.
+
 QUANTO VALE BH — RELATÓRIO DE AUDITORIA TÉCNICA
 Data da revisão: 11/07/2026
 Versão: AUDITADA FINAL

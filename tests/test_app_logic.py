@@ -3,13 +3,9 @@ import pandas as pd
 import pytest
 
 from app_logic import (
-    HYBRID_SCROLL_PENDING,
-    HYBRID_SCROLL_SEQUENCE,
     comparable_source_exclusions,
-    consume_hybrid_scroll,
     evaluate_selected_transaction,
     exclude_source_rows,
-    next_hybrid_scroll_token,
     same_address_reference_breakdown,
     selected_source_identifiers,
     store_hybrid_result,
@@ -140,61 +136,35 @@ def test_manual_flow_keeps_all_rows_without_source_identifiers():
     assert filtered["registro_id"].tolist() == ["uma", "duas"]
 
 
-def test_successful_hybrid_result_requests_first_scroll_token():
+def test_successful_hybrid_result_is_stored_for_dialog():
     state = {}
-    token = store_hybrid_result(
+    result = store_hybrid_result(
         state,
         local_rows="locais",
         building_rows="predio",
         stats={"estimated": 700_000},
         subject={"source_transaction": False},
     )
-    assert token == 1
-    assert state[HYBRID_SCROLL_SEQUENCE] == 1
-    assert state[HYBRID_SCROLL_PENDING] == 1
+    assert result is None
     assert state["hybrid_stats"]["estimated"] == 700_000
+    assert state["hybrid_local"] == "locais"
+    assert state["hybrid_building"] == "predio"
 
 
-def test_hybrid_scroll_token_is_consumed_once():
-    state = {HYBRID_SCROLL_SEQUENCE: 1, HYBRID_SCROLL_PENDING: 1}
-    assert consume_hybrid_scroll(state) == 1
-    assert HYBRID_SCROLL_PENDING not in state
-    assert consume_hybrid_scroll(state) is None
-    assert state[HYBRID_SCROLL_SEQUENCE] == 1
-
-
-def test_three_consecutive_hybrid_results_get_distinct_scroll_tokens():
+def test_repeated_results_replace_previous_dialog_content():
     state = {}
-    seen = []
     for estimated in (700_000, 750_000, 810_000):
-        token = store_hybrid_result(
+        store_hybrid_result(
             state,
-            local_rows="locais",
-            building_rows="predio",
+            local_rows=f"locais-{estimated}",
+            building_rows=f"predio-{estimated}",
             stats={"estimated": estimated},
             subject={"source_transaction": True},
         )
-        seen.append((token, consume_hybrid_scroll(state)))
 
-    assert seen == [(1, 1), (2, 2), (3, 3)]
-    assert state[HYBRID_SCROLL_SEQUENCE] == 3
     assert state["hybrid_stats"]["estimated"] == 810_000
-
-
-def test_new_calculation_replaces_unconsumed_pending_token_with_newer_one():
-    state = {}
-    assert next_hybrid_scroll_token(state) == 1
-    assert next_hybrid_scroll_token(state) == 2
-    assert consume_hybrid_scroll(state) == 2
-    assert consume_hybrid_scroll(state) is None
-
-
-def test_normal_rerun_does_not_request_scroll():
-    state = {
-        "hybrid_stats": {"estimated": 700_000},
-        HYBRID_SCROLL_SEQUENCE: 4,
-    }
-    assert consume_hybrid_scroll(state) is None
+    assert state["hybrid_local"] == "locais-810000"
+    assert state["hybrid_building"] == "predio-810000"
 
 
 def test_same_address_breakdown_normalizes_area_before_fipe_update():

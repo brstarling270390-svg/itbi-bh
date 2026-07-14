@@ -4,8 +4,6 @@ from collections.abc import Callable, MutableMapping
 from typing import Any
 
 
-HYBRID_SCROLL_SEQUENCE = "_hybrid_scroll_sequence"
-HYBRID_SCROLL_PENDING = "_hybrid_scroll_pending"
 
 
 def comparable_source_exclusions(
@@ -95,13 +93,6 @@ def same_address_reference_breakdown(
     }
 
 
-def next_hybrid_scroll_token(state: MutableMapping[str, Any]) -> int:
-    """Gera um token crescente para forçar uma nova rolagem a cada cálculo."""
-    token = int(state.get(HYBRID_SCROLL_SEQUENCE, 0)) + 1
-    state[HYBRID_SCROLL_SEQUENCE] = token
-    state[HYBRID_SCROLL_PENDING] = token
-    return token
-
 
 def store_hybrid_result(
     state: MutableMapping[str, Any],
@@ -110,16 +101,9 @@ def store_hybrid_result(
     building_rows: Any,
     stats: dict,
     subject: dict,
-) -> int:
-    """Armazena um cálculo híbrido concluído e cria uma nova solicitação de rolagem."""
+) -> None:
+    """Armazena um cálculo concluído para exibição no diálogo de resultado."""
     state["hybrid_local"] = local_rows
     state["hybrid_building"] = building_rows
     state["hybrid_stats"] = stats
     state["hybrid_subject"] = subject
-    return next_hybrid_scroll_token(state)
-
-
-def consume_hybrid_scroll(state: MutableMapping[str, Any]) -> int | None:
-    """Consome o token pendente; cada novo cálculo recebe um token diferente."""
-    token = state.pop(HYBRID_SCROLL_PENDING, None)
-    return int(token) if token is not None else None

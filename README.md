@@ -11,6 +11,7 @@ Aplicativo Streamlit para estimar valores atuais de imóveis, consultar transaç
 - Pesquisa de outras transações e negócios do mesmo endereço.
 - Link textual para abrir o endereço no Google Maps.
 - Painel de mercado com leitura automática, evolução contra Belo Horizonte, faixas de preço, comparação e ranking de bairros e perfil dos imóveis negociados.
+- Localização atual opcional por GPS para buscar o imóvel, pesquisar transações no endereço aproximado e abrir o mercado do bairro detectado.
 
 ## Valor de referência
 
@@ -50,6 +51,12 @@ A aba Mercado apresenta:
 - perfil das transações dos últimos 12 meses.
 
 Os rankings aplicam amostras mínimas para reduzir distorções de bairros com poucos negócios.
+
+## Localização atual
+
+A função de GPS é opcional. O navegador só solicita a localização depois de uma ação explícita do usuário e da autorização correspondente. O aplicativo transforma a coordenada em um endereço aproximado, mostra esse endereço para confirmação e só então aplica a informação ao fluxo escolhido.
+
+Por padrão, a geocodificação reversa usa OpenStreetMap/Nominatim com identificação do aplicativo, atribuição visível, cache e limitação de frequência. O endpoint pode ser alterado pela variável de ambiente `QV_REVERSE_GEOCODER_URL`, sem mudança de código. As coordenadas não são gravadas na base de transações do aplicativo.
 
 ## Atualização e integridade
 

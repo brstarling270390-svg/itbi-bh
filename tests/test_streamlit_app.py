@@ -1,3 +1,4 @@
+from pathlib import Path
 import data_manager
 from streamlit.testing.v1 import AppTest
 
@@ -28,29 +29,33 @@ def test_app_starts_on_single_valuation_flow_without_legacy_method_selector(monk
     assert all("Comparáveis recentes" not in control.options for control in at.segmented_control)
 
 
-def test_two_consecutive_selected_property_evaluations_generate_new_scroll_tokens(monkeypatch):
+def test_two_consecutive_selected_property_evaluations_open_fresh_dialogs(monkeypatch):
     at = _app(monkeypatch)
     at.text_input[0].set_value("RUA")
-    at.button[0].click().run()
+    search = next(i for i, button in enumerate(at.button) if button.label == "Buscar imóvel")
+    at.button[search].click().run()
     assert not at.exception
 
     first = next(i for i, button in enumerate(at.button) if button.key == "hybrid_update_demo:6")
     at.button[first].click().run()
     assert not at.exception
-    assert at.session_state["_hybrid_scroll_sequence"] == 1
+    assert len(at.get("dialog")) == 1
     assert [tab.label for tab in at.tabs] == ["Resumo", "Imóveis semelhantes (0)"]
-    assert any('hybrid-result-anchor-1' in item.value for item in at.markdown)
     first_result = next(
         item.value for item in at.markdown if "Estimativa de valor atual" in item.value
     )
 
+    close = next(i for i, button in enumerate(at.button) if button.key == "close_result_dialog")
+    at.button[close].click().run()
+    assert not at.exception
+    assert len(at.get("dialog")) == 0
+    assert any(button.key == "hybrid_update_demo:7" for button in at.button)
+
     second = next(i for i, button in enumerate(at.button) if button.key == "hybrid_update_demo:7")
     at.button[second].click().run()
     assert not at.exception
-    assert at.session_state["_hybrid_scroll_sequence"] == 2
-    assert "_hybrid_scroll_pending" not in at.session_state
+    assert len(at.get("dialog")) == 1
     assert [tab.label for tab in at.tabs] == ["Resumo", "Imóveis semelhantes (4)"]
-    assert any('hybrid-result-anchor-2' in item.value for item in at.markdown)
     assert "demo:7" not in set(at.session_state["hybrid_local"]["registro_id"].astype(str))
     if not at.session_state["hybrid_building"].empty:
         assert "demo:7" not in set(at.session_state["hybrid_building"]["registro_id"].astype(str))
@@ -59,8 +64,7 @@ def test_two_consecutive_selected_property_evaluations_generate_new_scroll_token
     )
     assert second_result != first_result
 
-
-def test_manual_valuation_flow_calculates_and_requests_scroll(monkeypatch):
+def test_manual_valuation_flow_opens_result_dialog(monkeypatch):
     at = _app(monkeypatch)
     at.segmented_control[1].set_value("Informar dados manualmente").run()
     assert not at.exception
@@ -71,15 +75,15 @@ def test_manual_valuation_flow_calculates_and_requests_scroll(monkeypatch):
     at.button[0].click().run()
 
     assert not at.exception
-    assert at.session_state["_hybrid_scroll_sequence"] == 1
+    assert len(at.get("dialog")) == 1
     assert any("Estimativa de valor atual" in item.value for item in at.markdown)
     assert [tab.label for tab in at.tabs][0] == "Resumo"
-
 
 def test_more_similar_properties_opens_prefilled_transactions(monkeypatch):
     at = _app(monkeypatch)
     at.text_input[0].set_value("RUA")
-    at.button[0].click().run()
+    search = next(i for i, button in enumerate(at.button) if button.label == "Buscar imóvel")
+    at.button[search].click().run()
     target = next(i for i, button in enumerate(at.button) if button.key == "hybrid_update_demo:7")
     at.button[target].click().run()
     more = next(i for i, button in enumerate(at.button) if button.key == "view_more_similar")
@@ -152,63 +156,53 @@ def test_same_address_cards_source_makes_area_normalization_explicit():
     assert "Ver como chegamos a" in source
 
 
-def test_scroll_script_moves_to_a_new_html_slot_on_each_consecutive_evaluation(monkeypatch):
+def test_result_dialog_removes_scroll_javascript_dependency(monkeypatch):
     at = _app(monkeypatch)
     at.text_input[0].set_value("RUA")
-    at.button[0].click().run()
-
-    first = next(i for i, button in enumerate(at.button) if button.key == "hybrid_update_demo:6")
-    at.button[first].click().run()
-    first_html = at.get("html")
-    assert len(first_html) == 1
-    assert 'hybrid-result-anchor-1' in first_html[0].proto.body
-    assert first_html[0].proto.unsafe_allow_javascript is True
-
-    second = next(i for i, button in enumerate(at.button) if button.key == "hybrid_update_demo:7")
-    at.button[second].click().run()
-    second_html = at.get("html")
-    assert len(second_html) == 2
-    assert 'data-qvbh-scroll-slot="1"' in second_html[0].proto.body
-    assert second_html[0].proto.unsafe_allow_javascript is False
-    assert 'hybrid-result-anchor-2' in second_html[1].proto.body
-    assert second_html[1].proto.unsafe_allow_javascript is True
-
-    third = next(i for i, button in enumerate(at.button) if button.key == "hybrid_update_demo:3")
-    at.button[third].click().run()
-    third_html = at.get("html")
-    assert len(third_html) == 3
-    assert 'data-qvbh-scroll-slot="1"' in third_html[0].proto.body
-    assert 'data-qvbh-scroll-slot="2"' in third_html[1].proto.body
-    assert 'hybrid-result-anchor-3' in third_html[2].proto.body
-    assert third_html[2].proto.unsafe_allow_javascript is True
-
-
-def test_normal_rerun_after_result_does_not_mount_scroll_script_again(monkeypatch):
-    at = _app(monkeypatch)
-    at.text_input[0].set_value("RUA")
-    at.button[0].click().run()
+    search = next(i for i, button in enumerate(at.button) if button.label == "Buscar imóvel")
+    at.button[search].click().run()
     target = next(i for i, button in enumerate(at.button) if button.key == "hybrid_update_demo:7")
     at.button[target].click().run()
-    assert len(at.get("html")) == 1
 
-    at.segmented_control[0].set_value("Mercado").run()
     assert not at.exception
-    assert len(at.get("html")) == 0
+    assert len(at.get("dialog")) == 1
+    assert len(at.get("iframe")) == 0
+    source = Path("app.py").read_text(encoding="utf-8")
+    assert "scroll_to_result" not in source
+    assert "window.parent.document" not in source
+    assert "st.iframe" not in source
 
-    at.segmented_control[0].set_value("Avaliar").run()
-    assert not at.exception
-    assert len(at.get("html")) == 0
-    assert at.session_state["_hybrid_scroll_sequence"] == 1
-
-
-def test_scroll_sequence_continues_when_switching_from_selected_to_manual_evaluation(monkeypatch):
+def test_closing_dialog_restores_search_without_hidden_scroll_state(monkeypatch):
     at = _app(monkeypatch)
     at.text_input[0].set_value("RUA")
-    at.button[0].click().run()
+    search = next(i for i, button in enumerate(at.button) if button.label == "Buscar imóvel")
+    at.button[search].click().run()
     target = next(i for i, button in enumerate(at.button) if button.key == "hybrid_update_demo:7")
     at.button[target].click().run()
-    assert at.session_state["_hybrid_scroll_sequence"] == 1
+    assert len(at.get("dialog")) == 1
 
+    close = next(i for i, button in enumerate(at.button) if button.key == "close_result_dialog")
+    at.button[close].click().run()
+    assert not at.exception
+    assert len(at.get("dialog")) == 0
+    assert any(button.key == "hybrid_update_demo:7" for button in at.button)
+    assert "_hybrid_scroll_pending" not in at.session_state
+    assert "_hybrid_scroll_sequence" not in at.session_state
+
+def test_selected_then_manual_evaluation_each_open_fresh_dialog(monkeypatch):
+    at = _app(monkeypatch)
+    at.text_input[0].set_value("RUA")
+    search = next(i for i, button in enumerate(at.button) if button.label == "Buscar imóvel")
+    at.button[search].click().run()
+    target = next(i for i, button in enumerate(at.button) if button.key == "hybrid_update_demo:7")
+    at.button[target].click().run()
+    first_result = next(
+        item.value for item in at.markdown if "Estimativa de valor atual" in item.value
+    )
+    assert len(at.get("dialog")) == 1
+
+    close = next(i for i, button in enumerate(at.button) if button.key == "close_result_dialog")
+    at.button[close].click().run()
     at.segmented_control[1].set_value("Informar dados manualmente").run()
     at.selectbox[0].set_value("FUNCIONARIOS")
     at.selectbox[1].set_value("AP")
@@ -216,8 +210,20 @@ def test_scroll_sequence_continues_when_switching_from_selected_to_manual_evalua
     at.button[0].click().run()
 
     assert not at.exception
-    assert at.session_state["_hybrid_scroll_sequence"] == 2
-    html_elements = at.get("html")
-    assert len(html_elements) == 2
-    assert 'data-qvbh-scroll-slot="1"' in html_elements[0].proto.body
-    assert 'hybrid-result-anchor-2' in html_elements[1].proto.body
+    assert len(at.get("dialog")) == 1
+    second_result = next(
+        item.value for item in at.markdown if "Estimativa de valor atual" in item.value
+    )
+    assert second_result != first_result
+
+def test_gps_entry_points_exist_in_valuation_transactions_and_market(monkeypatch):
+    at = _app(monkeypatch)
+    assert any(button.key == "open_gps_valuation" for button in at.button)
+
+    at.segmented_control[0].set_value("Transações").run()
+    assert not at.exception
+    assert any(button.key == "open_gps_transactions" for button in at.button)
+
+    at.segmented_control[0].set_value("Mercado").run()
+    assert not at.exception
+    assert any(button.key == "open_gps_market" for button in at.button)
