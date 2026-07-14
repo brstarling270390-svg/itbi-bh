@@ -1,5 +1,5 @@
 Quanto Vale BH
-Versão: 2026-07-14-gps-localizacao
+Versão: 2026-07-14-gps-localizacao-assets-fix
 
 Principais alterações:
 - mantém o resultado da avaliação em modal nativo do Streamlit, sem rolagem automática;
@@ -8,9 +8,10 @@ Principais alterações:
 - confirma o endereço aproximado antes de aplicar a localização;
 - executa a busca do imóvel, preenche a pesquisa de transações ou seleciona o bairro do Mercado;
 - usa geocodificação reversa com cache, identificação do aplicativo, atribuição e limitação de frequência;
-- o endpoint de geocodificação pode ser trocado por QV_REVERSE_GEOCODER_URL sem alterar o código.
+- o endpoint de geocodificação pode ser trocado por QV_REVERSE_GEOCODER_URL sem alterar o código;
+- corrige a publicação do componente GPS incluindo o frontend local completo e validando seus assets antes do uso.
 
 Validação:
-- 71 testes da suíte principal aprovados;
+- 75 testes da suíte principal aprovados;
 - 3 verificações automatizadas adicionais do fluxo GPS no AppTest aprovadas;
 - compilação completa, Ruff, pip check e health check do servidor aprovados.

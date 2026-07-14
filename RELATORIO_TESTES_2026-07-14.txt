@@ -1,11 +1,11 @@
 QUANTO VALE BH — RELATÓRIO DE VALIDAÇÃO
 Data: 14/07/2026
-Versão: GPS / localização atual
+Versão: GPS / localização atual — correção de publicação do componente
 
 RESULTADO
-- 71 testes automatizados da suíte principal aprovados.
+- 75 testes automatizados da suíte principal aprovados.
 - 3 verificações automatizadas adicionais do fluxo GPS aprovadas.
-- Total: 74 verificações automatizadas aprovadas.
+- Total: 78 verificações automatizadas aprovadas.
 - Compilação de todos os arquivos Python: aprovada.
 - Ruff (erros críticos): aprovado.
 - pip check: aprovado.
@@ -50,7 +50,15 @@ COBERTURA PRINCIPAL
 - seleção do bairro detectado na aba Mercado;
 - entradas de GPS disponíveis em Avaliar, Transações e Mercado;
 - componente local contém botão em português, alta precisão e tratamento de erro;
+- todos os arquivos estáticos do componente GPS são validados antes da declaração;
+- manifesto, HTML, CSS e bundle JavaScript do componente estão incluídos no pacote de publicação;
+- teste de regressão falha caso qualquer asset referenciado pelo manifesto esteja ausente;
 - fluxos simulados completos: GPS → confirmação → Avaliar, Transações e Mercado.
+
+CORREÇÃO DE PUBLICAÇÃO DO GPS
+- O pacote anterior continha o código Python que declarava o componente, mas não continha a pasta frontend/build usada pelo navegador. Isso explica a mensagem de erro de carregamento exibida em produção.
+- A versão atual inclui um frontend local autossuficiente, sem dependências externas de JavaScript ou CSS.
+- A inicialização do servidor e a integridade dos assets foram validadas.
 
 LIMITAÇÕES DE VALIDAÇÃO
 - O ambiente de execução bloqueou o Chromium headless ao acessar o servidor local com ERR_BLOCKED_BY_ADMINISTRATOR. Por isso, não foi possível automatizar de ponta a ponta o prompt real de permissão do navegador.
