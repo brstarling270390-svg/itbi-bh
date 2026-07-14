@@ -67,6 +67,34 @@ def exclude_source_rows(
     return filtered.copy()
 
 
+def same_address_reference_breakdown(
+    *,
+    reference_value: float,
+    reference_m2: float,
+    transaction_area: float,
+    subject_area: float,
+    fipe_factor: float,
+) -> dict[str, float]:
+    """Detalha a normalização por área e a atualização temporal de uma referência."""
+    values = {
+        "reference_value": float(reference_value),
+        "reference_m2": float(reference_m2),
+        "transaction_area": float(transaction_area),
+        "subject_area": float(subject_area),
+        "fipe_factor": float(fipe_factor),
+    }
+    if any(value <= 0 for value in values.values()):
+        raise ValueError("Os valores usados no detalhamento devem ser positivos.")
+
+    area_adjusted_value = values["reference_m2"] * values["subject_area"]
+    current_equivalent = area_adjusted_value * values["fipe_factor"]
+    return {
+        **values,
+        "area_adjusted_value": area_adjusted_value,
+        "current_equivalent": current_equivalent,
+    }
+
+
 def next_hybrid_scroll_token(state: MutableMapping[str, Any]) -> int:
     """Gera um token crescente para forçar uma nova rolagem a cada cálculo."""
     token = int(state.get(HYBRID_SCROLL_SEQUENCE, 0)) + 1

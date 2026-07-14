@@ -136,3 +136,17 @@ def test_all_primary_navigation_screens_render_without_exception(monkeypatch):
     for screen in ["Transações", "Mercado", "Sobre", "Avaliar"]:
         at.segmented_control[0].set_value(screen).run()
         assert not at.exception, screen
+
+
+
+def test_same_address_cards_source_makes_area_normalization_explicit():
+    from pathlib import Path
+
+    source = Path("app.py").read_text(encoding="utf-8")
+    assert "Valor de referência desta transação na época" in source
+    assert "Quanto esta transação indica para o imóvel avaliado hoje" in source
+    assert "não é uma simples atualização do valor histórico pelo FipeZAP" in source
+    assert "Não estamos simplesmente atualizando" in source
+    assert "adapta a referência para o tamanho do imóvel avaliado" in source
+    assert "Só então atualizamos temporalmente pelo FipeZAP" in source
+    assert "Ver como chegamos a" in source

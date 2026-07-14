@@ -15,6 +15,7 @@ from app_logic import (
     consume_hybrid_scroll,
     evaluate_selected_transaction,
     exclude_source_rows,
+    same_address_reference_breakdown,
     store_hybrid_result,
 )
 from market_logic import (
@@ -1608,9 +1609,20 @@ if screen == "Avaliar":
 
             if not building_rows.empty:
                 st.subheader("Mesmo endereço")
+                st.info(
+                    "**Como ler estes cartões:** o valor indicado para o imóvel avaliado **não é uma simples atualização do valor histórico pelo FipeZAP**. "
+                    "O app primeiro transforma cada transação em valor por m² cadastral, ajusta esse valor para a área cadastral do imóvel que está sendo avaliado e, só depois, aplica a atualização temporal do FipeZAP."
+                )
                 for _, row in building_rows.sort_values(
                     "data_quitacao", ascending=False
                 ).head(10).iterrows():
+                    breakdown = same_address_reference_breakdown(
+                        reference_value=float(row["valor_referencia"]),
+                        reference_m2=float(row["valor_m2_referencia"]),
+                        transaction_area=float(row["area_construida"]),
+                        subject_area=float(subject["area"]),
+                        fipe_factor=float(row["fator_fipe"]),
+                    )
                     with st.container(border=True):
                         address_header(
                             row["endereco"],
@@ -1619,11 +1631,46 @@ if screen == "Avaliar":
                             row["tipo_descricao"],
                         )
                         c1, c2 = st.columns(2)
-                        c1.metric("Referência na época", brl(row["valor_referencia"]))
-                        c2.metric("Equivalente atual", brl(row["valor_equivalente_atual"]))
-                        st.caption(
-                            f"Área cadastral PBH: {number_br(row['area_construida'], 2)} m² · fator FipeZAP aplicado: {number_br(row['fator_fipe'], 4)}"
+                        c1.metric(
+                            "Valor de referência desta transação na época",
+                            brl(row["valor_referencia"]),
+                            help="Maior valor entre o declarado e a base de cálculo da PBH.",
                         )
+                        c2.metric(
+                            "Quanto esta transação indica para o imóvel avaliado hoje",
+                            brl(row["valor_equivalente_atual"]),
+                        )
+                        st.markdown(
+                            f"**Não estamos simplesmente atualizando {brl(row['valor_referencia'])}.** "
+                            f"A transação tinha **{number_br(breakdown['transaction_area'], 2)} m² cadastrais** e o imóvel avaliado tem "
+                            f"**{number_br(breakdown['subject_area'], 2)} m² cadastrais**. Por isso, o cálculo usa primeiro o valor por m², "
+                            "adapta a referência para o tamanho do imóvel avaliado e somente depois aplica o FipeZAP."
+                        )
+                        st.caption(
+                            f"{number_br(breakdown['transaction_area'], 2)} m² da transação → "
+                            f"{brl(breakdown['reference_m2'], 2)}/m² → "
+                            f"ajustado para {number_br(breakdown['subject_area'], 2)} m² do imóvel avaliado → "
+                            f"FipeZAP × {number_br(breakdown['fipe_factor'], 4)} → "
+                            f"{brl(breakdown['current_equivalent'])}"
+                        )
+                        with st.expander(
+                            f"Ver como chegamos a {brl(row['valor_equivalente_atual'])}"
+                        ):
+                            st.markdown(
+                                f"""
+**1. Transformamos a transação em valor por m² cadastral**  
+{brl(breakdown['reference_value'])} ÷ {number_br(breakdown['transaction_area'], 2)} m² = **{brl(breakdown['reference_m2'], 2)}/m²**
+
+**2. Aplicamos esse valor por m² à área cadastral do imóvel avaliado**  
+{brl(breakdown['reference_m2'], 2)}/m² × {number_br(breakdown['subject_area'], 2)} m² = **{brl(breakdown['area_adjusted_value'])}**
+
+**3. Só então atualizamos temporalmente pelo FipeZAP**  
+{brl(breakdown['area_adjusted_value'])} × {number_br(breakdown['fipe_factor'], 4)} = **{brl(breakdown['current_equivalent'])}**
+                                """
+                            )
+                            st.caption(
+                                "Os valores intermediários exibidos são arredondados para facilitar a leitura. O cálculo usa os valores completos armazenados na base."
+                            )
                         maps_button(row["endereco"], row["bairro"])
 
             if not other_local_rows.empty:

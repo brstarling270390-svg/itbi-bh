@@ -1,5 +1,6 @@
 import duckdb
 import pandas as pd
+import pytest
 
 from app_logic import (
     HYBRID_SCROLL_PENDING,
@@ -9,6 +10,7 @@ from app_logic import (
     evaluate_selected_transaction,
     exclude_source_rows,
     next_hybrid_scroll_token,
+    same_address_reference_breakdown,
     selected_source_identifiers,
     store_hybrid_result,
 )
@@ -193,3 +195,42 @@ def test_normal_rerun_does_not_request_scroll():
         HYBRID_SCROLL_SEQUENCE: 4,
     }
     assert consume_hybrid_scroll(state) is None
+
+
+def test_same_address_breakdown_normalizes_area_before_fipe_update():
+    breakdown = same_address_reference_breakdown(
+        reference_value=700_000,
+        reference_m2=700_000 / 159.90,
+        transaction_area=159.90,
+        subject_area=117.13,
+        fipe_factor=1.4389,
+    )
+
+    assert breakdown["reference_m2"] == pytest.approx(4_377.736085, rel=1e-9)
+    assert breakdown["area_adjusted_value"] == pytest.approx(512_764.2276422763, rel=1e-9)
+    assert breakdown["current_equivalent"] == pytest.approx(737_816.4471544714, rel=1e-9)
+    assert breakdown["current_equivalent"] != pytest.approx(700_000 * 1.4389)
+
+
+def test_same_address_breakdown_same_area_reduces_to_temporal_update():
+    breakdown = same_address_reference_breakdown(
+        reference_value=433_272,
+        reference_m2=433_272 / 117.13,
+        transaction_area=117.13,
+        subject_area=117.13,
+        fipe_factor=1.5824,
+    )
+
+    assert breakdown["area_adjusted_value"] == pytest.approx(433_272)
+    assert breakdown["current_equivalent"] == pytest.approx(433_272 * 1.5824)
+
+
+def test_same_address_breakdown_rejects_non_positive_inputs():
+    with pytest.raises(ValueError):
+        same_address_reference_breakdown(
+            reference_value=700_000,
+            reference_m2=4_377.73,
+            transaction_area=159.90,
+            subject_area=0,
+            fipe_factor=1.4389,
+        )

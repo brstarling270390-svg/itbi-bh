@@ -1,12 +1,12 @@
 Quanto Vale BH — validação 2026-07-13
 
 RESULTADO
-- 44 testes aprovados em 8,51 s.
+- 48 testes aprovados em 11,92 s em ambiente virtual limpo criado a partir do requirements.txt.
 - Compilação integral Python aprovada (compileall).
-- Ruff F/E9 aprovado: sem nomes indefinidos, imports ausentes ou erros sintáticos críticos cobertos por essas regras.
-- Ambiente virtual limpo com requirements.txt: pip check sem dependências quebradas.
+- Ruff E9/F63/F7/F82 aprovado: sem nomes indefinidos, imports ausentes ou erros sintáticos críticos cobertos por essas regras.
+- uv pip check no ambiente limpo: todas as dependências instaladas são compatíveis.
 
-COBERTURA NOVA
+COBERTURA FUNCIONAL E DE REGRESSÃO
 - Exclusão da transação de origem por registro_id.
 - Exclusão de cópia equivalente por chave_tecnica.
 - Preservação de outras transações legítimas do mesmo endereço.
@@ -16,6 +16,11 @@ COBERTURA NOVA
 - Consumo único do token de rolagem.
 - Três avaliações consecutivas gerando tokens 1, 2 e 3.
 - Substituição de token pendente por cálculo mais recente.
+- Detalhamento da referência do mesmo endereço: valor por m², normalização para a área do imóvel avaliado e atualização temporal posterior pelo FipeZAP.
+- Cenário de áreas diferentes confirma que o valor final não é simples correção do valor histórico pelo índice.
+- Cenário de áreas iguais confirma equivalência com a atualização temporal pura.
+- Rejeição de valores não positivos no detalhamento do cálculo.
+- Presença, no código da interface, dos textos explícitos de normalização por área e do passo a passo do cálculo.
 - Janelas de mercado de 3 e 12 meses.
 - Variação percentual e tratamento de base zero.
 - Mediana móvel de 3 meses.
@@ -36,5 +41,15 @@ COBERTURA NOVA
 - Streamlit AppTest: filtro por bairro e período de 5 anos.
 - Streamlit AppTest: navegação Avaliar, Transações, Mercado e Sobre sem exceções.
 
+CORREÇÃO DE UX DESTA VERSÃO
+Nos cartões de transações do mesmo endereço, a interface deixa explícito que o valor indicado para o imóvel avaliado hoje NÃO é uma simples atualização do valor histórico pelo FipeZAP. A tela agora mostra:
+1. o valor de referência da transação na época;
+2. o valor por m² cadastral daquela transação;
+3. a adaptação desse valor por m² à área cadastral do imóvel avaliado;
+4. a aplicação posterior do fator temporal FipeZAP;
+5. o valor equivalente final;
+6. um expander "Ver como chegamos a R$ ..." com as três contas em sequência.
+Os valores intermediários exibidos são arredondados apenas para leitura; o cálculo continua usando os valores completos da base.
+
 LIMITAÇÃO DE TESTE
-A execução JavaScript do scroll suave no navegador real não pôde ser automatizada no ambiente de validação porque o navegador headless bloqueou acesso ao servidor local. A lógica de disparo foi validada por AppTest com duas avaliações sucessivas, tokens distintos e marcadores DOM distintos. O scroll agora usa st.html com JavaScript no documento principal, em vez do iframe antigo.
+A execução JavaScript do scroll suave no navegador real não pôde ser automatizada no ambiente de validação porque o navegador headless bloqueou acesso ao servidor local. A lógica de disparo foi validada por AppTest com duas avaliações sucessivas, tokens distintos e marcadores DOM distintos. O scroll usa st.html com JavaScript no documento principal.
