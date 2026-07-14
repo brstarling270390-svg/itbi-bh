@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import time
 import unicodedata
+import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from io import BytesIO
@@ -28,6 +32,9 @@ DEMO_PATH = DATA_DIR / "demo_itbi.csv"
 FIPEZAP_BH_PATH = DATA_DIR / "fipezap_bh.csv"
 FIPEZAP_SERIES_URL = "https://downloads.fipe.org.br/indices/fipezap/fipezap-serieshistoricas.xlsx"
 FIPEZAP_SOURCE_URL = "https://www.fipe.org.br/pt-br/indices/fipezap/"
+UPDATE_LOCK_PATH = DATA_DIR / ".update.lock"
+UPDATE_LOCK_TIMEOUT_SECONDS = 300.0
+UPDATE_LOCK_STALE_SECONDS = 3600.0
 
 CANONICAL_COLUMNS = [
     "endereco",
@@ -97,6 +104,98 @@ TYPE_LABELS = {
     "VR": "Vaga residencial",
     "VV": "Vaga de uso misto",
 }
+
+
+
+
+class DatabaseUpdateInProgressError(RuntimeError):
+    """Sinaliza que outra sessão está atualizando a base há tempo demais."""
+
+
+def _lock_is_stale(path: Path, stale_after_seconds: float) -> bool:
+    """Retorna True quando um lock antigo provavelmente ficou órfão."""
+    try:
+        age = time.time() - path.stat().st_mtime
+    except FileNotFoundError:
+        return False
+    return age > stale_after_seconds
+
+
+@contextmanager
+def database_update_lock(
+    *,
+    timeout_seconds: float = UPDATE_LOCK_TIMEOUT_SECONDS,
+    poll_interval: float = 0.25,
+    stale_after_seconds: float = UPDATE_LOCK_STALE_SECONDS,
+):
+    """Serializa atualizações da base entre reruns e sessões do Streamlit."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + max(float(timeout_seconds), 0.0)
+    acquired = False
+
+    while not acquired:
+        try:
+            descriptor = os.open(
+                UPDATE_LOCK_PATH,
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+            )
+            try:
+                payload = (
+                    f"pid={os.getpid()}\n"
+                    f"started_at={datetime.now().isoformat(timespec='seconds')}\n"
+                ).encode("utf-8")
+                os.write(descriptor, payload)
+            finally:
+                os.close(descriptor)
+            acquired = True
+        except FileExistsError:
+            if _lock_is_stale(UPDATE_LOCK_PATH, stale_after_seconds):
+                try:
+                    UPDATE_LOCK_PATH.unlink()
+                except FileNotFoundError:
+                    pass
+                continue
+
+            if time.monotonic() >= deadline:
+                raise DatabaseUpdateInProgressError(
+                    "Outra sessão já está preparando a base da PBH. "
+                    "Aguarde a conclusão e tente novamente."
+                )
+            time.sleep(max(float(poll_interval), 0.01))
+
+    try:
+        yield
+    finally:
+        if acquired:
+            try:
+                UPDATE_LOCK_PATH.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def _metadata_satisfies_scope(
+    metadata: dict,
+    *,
+    include_historical: bool,
+    minimum_records: int = 1000,
+) -> bool:
+    """Confere se a base existente já atende à carga solicitada."""
+    records = int(
+        metadata.get("registros", metadata.get("registros_unicos", 0)) or 0
+    )
+    if not database_exists() or records < minimum_records:
+        return False
+
+    if not include_historical:
+        return True
+
+    if metadata.get("escopo") == "historico_completo":
+        return True
+
+    try:
+        return pd.Timestamp(metadata.get("data_inicial")) <= pd.Timestamp("2010-01-01")
+    except (TypeError, ValueError):
+        return False
 
 
 @dataclass(frozen=True)
@@ -364,20 +463,21 @@ def build_database(
     minimum_records: int = 1000,
 ) -> dict:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    temp_db = DB_PATH.with_suffix(".tmp.duckdb")
-    for suffix in ["", ".wal"]:
-        candidate = Path(str(temp_db) + suffix)
-        if candidate.exists():
-            candidate.unlink()
+    # Cada carga usa um banco temporário exclusivo. Reruns ou sessões simultâneas
+    # nunca compartilham o mesmo arquivo de build e, portanto, não disputam a
+    # criação da tabela ``transactions``.
+    temp_db = DB_PATH.with_name(
+        f"{DB_PATH.stem}.build-{uuid.uuid4().hex}.duckdb"
+    )
 
-    connection = duckdb.connect(str(temp_db))
-    _create_schema(connection)
     total_files = len(paths)
     total_rows = 0
     if len(resources) != len(paths):
         raise ValueError("A quantidade de recursos não corresponde à quantidade de arquivos.")
 
+    connection = duckdb.connect(str(temp_db))
     try:
+        _create_schema(connection)
         for file_index, (resource, path) in enumerate(zip(resources, paths), 1):
             if progress_callback:
                 progress_callback(file_index - 1, total_files, f"Processando {resource.name}")
@@ -448,12 +548,31 @@ def build_database(
             )
 
         connection.execute("CHECKPOINT")
-    finally:
+    except Exception:
+        connection.close()
+        try:
+            temp_db.unlink()
+        except FileNotFoundError:
+            pass
+        wal_path = Path(str(temp_db) + ".wal")
+        try:
+            wal_path.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+    else:
         connection.close()
 
     # Substituição atômica: reduz a janela em que outra sessão poderia encontrar
     # o banco ausente durante uma atualização.
-    temp_db.replace(DB_PATH)
+    try:
+        temp_db.replace(DB_PATH)
+    except Exception:
+        try:
+            temp_db.unlink()
+        except FileNotFoundError:
+            pass
+        raise
 
     metadata = {
         "dataset_id": DATASET_ID,
@@ -474,18 +593,45 @@ def build_database(
 
 
 def update_from_pbh(progress_callback=None, force_download: bool = False, include_historical: bool = True) -> dict:
-    package = fetch_package_metadata()
-    resources = select_csv_resources(package, include_historical=include_historical)
-    if not resources:
-        raise RuntimeError("O catálogo da PBH não retornou arquivos CSV do ITBI.")
-    paths = download_resources(resources, progress_callback=progress_callback, force=force_download)
-    metadata = build_database(resources, paths, progress_callback=progress_callback)
-    metadata["escopo"] = "historico_completo" if include_historical else "base_recente"
-    _atomic_write_text(
-        METADATA_PATH,
-        json.dumps(metadata, ensure_ascii=False, indent=2),
-    )
-    return metadata
+    # O Streamlit pode executar o script novamente enquanto uma primeira sessão
+    # ainda prepara a base. O lock impede duas cargas concorrentes. A segunda
+    # execução espera; ao entrar, reaproveita a base concluída pela primeira.
+    with database_update_lock():
+        current_metadata = load_metadata()
+        if (
+            not force_download
+            and _metadata_satisfies_scope(
+                current_metadata,
+                include_historical=include_historical,
+            )
+        ):
+            return current_metadata
+
+        package = fetch_package_metadata()
+        resources = select_csv_resources(
+            package,
+            include_historical=include_historical,
+        )
+        if not resources:
+            raise RuntimeError("O catálogo da PBH não retornou arquivos CSV do ITBI.")
+        paths = download_resources(
+            resources,
+            progress_callback=progress_callback,
+            force=force_download,
+        )
+        metadata = build_database(
+            resources,
+            paths,
+            progress_callback=progress_callback,
+        )
+        metadata["escopo"] = (
+            "historico_completo" if include_historical else "base_recente"
+        )
+        _atomic_write_text(
+            METADATA_PATH,
+            json.dumps(metadata, ensure_ascii=False, indent=2),
+        )
+        return metadata
 
 
 

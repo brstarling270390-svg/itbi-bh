@@ -1,0 +1,48 @@
+Quanto Vale BH — validação 2026-07-14
+
+RESULTADO
+- 55 testes aprovados em 9,49 s na suíte final.
+- A mesma suíte foi repetida em ambiente virtual limpo criado exclusivamente a partir do requirements.txt: 55 testes aprovados em 11,26 s.
+- Compilação integral Python aprovada (compileall).
+- Ruff E9/F63/F7/F82 aprovado: sem erros sintáticos críticos, nomes indefinidos ou imports ausentes cobertos por essas regras.
+- uv pip check no ambiente limpo: 53 pacotes verificados; todas as dependências compatíveis.
+
+ERRO DE INICIALIZAÇÃO CORRIGIDO
+Erro observado no Streamlit Cloud:
+Catalog Error: Table with name "transactions" already exists!
+
+CAUSA IDENTIFICADA
+A primeira abertura do app pode provocar reruns ou sessões concorrentes enquanto a base da PBH ainda está sendo construída. A versão anterior usava sempre o mesmo banco temporário, itbi_bh.tmp.duckdb. Duas execuções simultâneas podiam abrir o mesmo arquivo e tentar criar a tabela transactions, gerando a colisão exibida na tela.
+
+CORREÇÃO IMPLEMENTADA
+1. Lock exclusivo de atualização em arquivo para serializar cargas concorrentes entre sessões/reruns.
+2. Banco temporário exclusivo por build, com UUID no nome; duas cargas nunca compartilham o mesmo arquivo temporário.
+3. A segunda sessão aguarda a primeira. Depois do lock, confere novamente a base e reaproveita a carga concluída, sem reconstruí-la desnecessariamente.
+4. Locks órfãos antigos são detectados e removidos após limite de segurança.
+5. Builds que falham limpam banco temporário e WAL residual.
+6. Se uma espera excepcionalmente longa esgotar o limite, a interface informa que outra sessão está preparando a base, em vez de exibir um erro técnico bruto.
+7. Atualização manual forçada continua reconstruindo a base quando o usuário solicita explicitamente.
+
+TESTES NOVOS DE REGRESSÃO
+- Duas sessões competindo pelo lock nunca entram simultaneamente na seção crítica.
+- Lock órfão antigo é substituído com segurança.
+- Timeout do lock gera exceção específica e tratável pela interface.
+- Segunda atualização concorrente reaproveita a base criada pela primeira; apenas um build é executado.
+- Atualização forçada não reutiliza silenciosamente a base existente.
+- Build inválido remove banco temporário e WAL residual.
+- Teste de integração com DuckDB real e CSV de 1.000 registros executa duas atualizações iniciais concorrentes: ambas concluem com 1.000 registros, há apenas uma tabela transactions, nenhum arquivo de build fica residual e o erro "table already exists" não ocorre.
+
+REGRESSÕES ANTERIORES MANTIDAS
+- Fluxo único de avaliação.
+- Exclusão da transação de origem e de cópia equivalente.
+- Preservação de negócios legítimos do mesmo endereço.
+- Tokens crescentes de rolagem em avaliações consecutivas.
+- Avaliação manual e avaliação a partir da base.
+- Resumo e imóveis semelhantes.
+- Explicação explícita da normalização por área antes da atualização FipeZAP.
+- Ver mais semelhantes com filtros pré-preenchidos.
+- Panorama, leitura automática, série bairro x BH, comparação de bairros, radar, faixas de preço e perfil de imóveis na aba Mercado.
+- Navegação Avaliar, Transações, Mercado e Sobre sem exceções no Streamlit AppTest.
+
+LIMITAÇÃO REMANESCENTE DE TESTE
+A execução visual do movimento de scroll suave em Chromium real continua sem automação de navegador no ambiente de validação. A lógica de disparo segue coberta por AppTest com avaliações sucessivas, tokens distintos e marcadores DOM distintos.
