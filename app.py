@@ -18,6 +18,7 @@ from app_logic import (
 )
 from market_logic import (
     MIN_RADAR_TRANSACTIONS,
+    MIN_WINDOW_TRANSACTIONS,
     eligible_neighborhoods,
     market_reading,
     market_scope_stats,
@@ -2195,7 +2196,7 @@ elif screen == "Mercado":
         c1.metric(
             "Valor atual por m²",
             brl(market_stats["current_m2"], 0),
-            help="Mediana móvel dos três meses mais recentes disponíveis.",
+            help="Mediana de todas as transações válidas dos três meses mais recentes.",
         )
         c2.metric(
             "Variação em 12 meses",
@@ -2275,28 +2276,45 @@ elif screen == "Mercado":
 
     if plot_frames:
         plot_data = pd.concat(plot_frames, ignore_index=True)
+        plot_data["mes_rotulo"] = plot_data["mes"].apply(data_limit_label)
+        plot_data["valor_rotulo"] = plot_data["mediana_m2_3m"].apply(
+            lambda value: brl(value, 0)
+        )
         fig = px.line(
             plot_data,
             x="mes",
             y="mediana_m2_3m",
             color="escopo",
             markers=True,
+            custom_data=["mes_rotulo", "valor_rotulo", "transacoes_3m"],
             labels={
                 "mes": "Mês",
                 "mediana_m2_3m": "Valor por m² cadastral",
                 "escopo": "",
             },
         )
+        fig.update_traces(
+            connectgaps=False,
+            hovertemplate=(
+                "<b>%{fullData.name}</b><br>"
+                "%{customdata[0]}<br>"
+                "%{customdata[1]} por m² cadastral<br>"
+                "%{customdata[2]} transações na janela de 3 meses"
+                "<extra></extra>"
+            ),
+        )
         fig.update_layout(
             yaxis_tickprefix="R$ ",
-            hovermode="x unified",
+            hovermode="closest",
             margin=dict(l=10, r=10, t=20, b=10),
             legend_title_text="",
             showlegend=len(plot_frames) > 1,
         )
         st.plotly_chart(fig, width="stretch")
         st.caption(
-            "A linha usa a mediana móvel de três meses do valor de referência por m² cadastral. Quando um bairro é selecionado, Belo Horizonte aparece como comparação."
+            f"Cada ponto é a mediana de todas as transações válidas da janela de três meses encerrada naquele mês. "
+            f"Janelas com menos de {MIN_WINDOW_TRANSACTIONS} transações são omitidas e interrompem a linha, em vez de criar uma tendência artificial. "
+            "Ao passar o cursor, o gráfico mostra quantas transações sustentam cada ponto. Quando um bairro é selecionado, Belo Horizonte aparece como comparação."
         )
     else:
         st.info("Não há série histórica suficiente para esse recorte.")

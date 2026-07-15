@@ -64,3 +64,23 @@ LIMITAÇÕES DE VALIDAÇÃO
 - O ambiente de execução bloqueou o Chromium headless ao acessar o servidor local com ERR_BLOCKED_BY_ADMINISTRATOR. Por isso, não foi possível automatizar de ponta a ponta o prompt real de permissão do navegador.
 - A saída de rede do contêiner não resolveu o domínio do geocodificador durante um teste manual. A chamada HTTP foi testada com respostas simuladas, incluindo parâmetros, cabeçalhos, erros, limitação de frequência e formato de retorno.
 - O funcionamento do GPS em produção depende de contexto seguro (HTTPS), permissão do navegador e disponibilidade do serviço de geocodificação configurado.
+
+CORREÇÃO DO GRÁFICO DE EVOLUÇÃO DO MERCADO — 2026-07-14
+- A implementação anterior calculava primeiro a mediana de cada mês e depois aplicava uma mediana móvel sobre três medianas mensais. Esse método podia distorcer a série quando os meses tinham quantidades muito diferentes de transações.
+- A implementação atual calcula diretamente a mediana de todas as transações válidas contidas na janela de três meses-calendário encerrada em cada mês.
+- Os meses do eixo são gerados continuamente. Uma janela com menos de 5 transações permanece na série, mas seu valor é ocultado, fazendo o gráfico interromper a linha em vez de conectar períodos de baixa evidência.
+- O tooltip informa a quantidade de transações considerada em cada ponto.
+
+TESTES DE REGRESSÃO ADICIONADOS
+- mediana agrupada das transações difere corretamente da antiga mediana de medianas mensais quando as amostras mensais são desiguais;
+- janelas com menos de 5 transações são mascaradas sem remover o mês do eixo;
+- lacunas de calendário são preservadas e não aproximam artificialmente meses distantes;
+- o primeiro ponto visível do gráfico usa corretamente os dois meses anteriores à janela exibida;
+- entrada incompleta no preparador da série falha explicitamente.
+
+RESULTADO FINAL DESTA VERSÃO
+- 79 testes automatizados aprovados em ambiente virtual limpo;
+- compileall aprovado;
+- Ruff E9/F63/F7/F82 aprovado;
+- pip check: No broken requirements found;
+- Streamlit health check: ok.

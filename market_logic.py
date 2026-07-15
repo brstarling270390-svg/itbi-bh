@@ -131,35 +131,85 @@ def monthly_market_series(
     date_start: object,
     date_end: object,
     reference_m2_sql: str,
+    min_window_transactions: int = MIN_WINDOW_TRANSACTIONS,
 ) -> pd.DataFrame:
-    where = [
-        "data_quitacao BETWEEN ? AND ?",
-        f"{reference_m2_sql} BETWEEN 300 AND 100000",
-    ]
-    params: list[object] = [date_start, date_end]
+    """Série mensal robusta usando todas as transações de cada janela móvel de 3 meses.
+
+    Cada ponto do gráfico representa a mediana das transações ocorridas no mês de
+    referência e nos dois meses-calendário anteriores. Isso evita o viés de tirar
+    uma nova mediana sobre medianas mensais com tamanhos de amostra diferentes.
+    Meses com amostra inferior ao mínimo são preservados na série, mas o valor é
+    ocultado para que o gráfico interrompa a linha em vez de ligar períodos frágeis.
+    """
     scope_where, scope_params = _scope_filter(bairro, tipo)
-    where.extend(scope_where)
-    params.extend(scope_params)
+    scope_clause = ""
+    if scope_where:
+        scope_clause = " AND " + " AND ".join(scope_where)
+
     frame = con.execute(
         f"""
-        SELECT DATE_TRUNC('month', data_quitacao) AS mes,
-               COUNT(*) AS transacoes,
-               MEDIAN({reference_m2_sql}) AS mediana_m2
-        FROM transactions
-        WHERE {' AND '.join(where)}
-        GROUP BY 1
-        ORDER BY 1
+        WITH bounds AS (
+            SELECT
+                DATE_TRUNC('month', CAST(? AS DATE))::DATE AS start_month,
+                DATE_TRUNC('month', CAST(? AS DATE))::DATE AS end_month
+        ),
+        months AS (
+            SELECT generated_month::DATE AS mes
+            FROM bounds,
+                 GENERATE_SERIES(start_month, end_month, INTERVAL '1 month')
+                 AS generated(generated_month)
+        ),
+        base AS (
+            SELECT
+                data_quitacao,
+                {reference_m2_sql} AS valor_m2
+            FROM transactions, bounds
+            WHERE data_quitacao >= start_month - INTERVAL '2 months'
+              AND data_quitacao < end_month + INTERVAL '1 month'
+              AND {reference_m2_sql} BETWEEN 300 AND 100000
+              {scope_clause}
+        )
+        SELECT
+            months.mes,
+            COUNT(base.valor_m2) AS transacoes_3m,
+            MEDIAN(base.valor_m2) AS mediana_m2_3m
+        FROM months
+        LEFT JOIN base
+          ON base.data_quitacao >= months.mes - INTERVAL '2 months'
+         AND base.data_quitacao < months.mes + INTERVAL '1 month'
+        GROUP BY months.mes
+        ORDER BY months.mes
         """,
-        params,
+        [date_start, date_end, *scope_params],
     ).fetchdf()
-    return prepare_market_series(frame)
+    return prepare_market_series(
+        frame, min_window_transactions=min_window_transactions
+    )
 
 
-def prepare_market_series(series: pd.DataFrame) -> pd.DataFrame:
+def prepare_market_series(
+    series: pd.DataFrame,
+    *,
+    min_window_transactions: int = MIN_WINDOW_TRANSACTIONS,
+) -> pd.DataFrame:
+    """Normaliza a série móvel e mascara janelas com amostra insuficiente."""
     if series.empty:
         return series.copy()
+    required = {"mes", "transacoes_3m", "mediana_m2_3m"}
+    missing = required - set(series.columns)
+    if missing:
+        raise ValueError(
+            "Série de mercado sem colunas obrigatórias: " + ", ".join(sorted(missing))
+        )
     frame = series.copy().sort_values("mes").reset_index(drop=True)
-    frame["mediana_m2_3m"] = frame["mediana_m2"].rolling(3, min_periods=1).median()
+    frame["mes"] = pd.to_datetime(frame["mes"])
+    frame["transacoes_3m"] = pd.to_numeric(
+        frame["transacoes_3m"], errors="coerce"
+    ).fillna(0).astype(int)
+    frame["amostra_suficiente"] = frame["transacoes_3m"].ge(
+        min_window_transactions
+    )
+    frame.loc[~frame["amostra_suficiente"], "mediana_m2_3m"] = pd.NA
     return frame
 
 

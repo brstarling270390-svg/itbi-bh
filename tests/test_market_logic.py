@@ -93,16 +93,24 @@ def test_pct_change_handles_positive_negative_and_zero_base():
     assert pct_change(None, 10) is None
 
 
-def test_prepare_market_series_adds_three_month_rolling_median():
+def test_prepare_market_series_masks_small_windows_without_dropping_months():
     frame = pd.DataFrame(
         {
-            "mes": pd.to_datetime(["2026-01-01", "2026-02-01", "2026-03-01", "2026-04-01"]),
-            "transacoes": [10, 10, 10, 10],
-            "mediana_m2": [100.0, 200.0, 1000.0, 300.0],
+            "mes": pd.to_datetime(["2026-01-01", "2026-02-01", "2026-03-01"]),
+            "transacoes_3m": [4, 5, 7],
+            "mediana_m2_3m": [1000.0, 2000.0, 3000.0],
         }
     )
     result = prepare_market_series(frame)
-    assert result["mediana_m2_3m"].tolist() == [100.0, 150.0, 200.0, 300.0]
+    assert len(result) == 3
+    assert pd.isna(result.loc[0, "mediana_m2_3m"])
+    assert result.loc[1, "mediana_m2_3m"] == 2000.0
+    assert result["amostra_suficiente"].tolist() == [False, True, True]
+
+
+def test_prepare_market_series_rejects_incomplete_input():
+    with pytest.raises(ValueError, match="colunas obrigatórias"):
+        prepare_market_series(pd.DataFrame({"mes": ["2026-01-01"]}))
 
 
 def test_market_scope_stats_calculates_current_change_volume_and_profile():
@@ -171,7 +179,110 @@ def test_monthly_market_series_returns_smoothed_series():
         con.close()
     assert not series.empty
     assert "mediana_m2_3m" in series.columns
+    assert "transacoes_3m" in series.columns
+    assert "amostra_suficiente" in series.columns
     assert series["mes"].is_monotonic_increasing
+
+
+def test_monthly_market_series_uses_pooled_transactions_not_median_of_monthly_medians():
+    con = duckdb.connect(":memory:")
+    con.execute(
+        """
+        CREATE TABLE transactions (
+            bairro VARCHAR,
+            tipo_construtivo VARCHAR,
+            data_quitacao DATE,
+            valor_declarado DOUBLE,
+            valor_base_calculo DOUBLE,
+            area_construida DOUBLE
+        )
+        """
+    )
+    rows = []
+    rows.extend([("ALFA", "AP", "2026-01-15", 100_000.0, 100_000.0, 100.0)] * 9)
+    rows.append(("ALFA", "AP", "2026-02-15", 1_000_000.0, 1_000_000.0, 100.0))
+    rows.append(("ALFA", "AP", "2026-03-15", 1_000_000.0, 1_000_000.0, 100.0))
+    con.executemany("INSERT INTO transactions VALUES (?, ?, ?, ?, ?, ?)", rows)
+    try:
+        series = monthly_market_series(
+            con,
+            bairro="ALFA",
+            tipo="AP",
+            date_start="2026-01-01",
+            date_end="2026-03-31",
+            reference_m2_sql=RM,
+        )
+    finally:
+        con.close()
+
+    march = series.set_index(series["mes"].dt.strftime("%Y-%m")).loc["2026-03"]
+    assert march["transacoes_3m"] == 11
+    assert march["mediana_m2_3m"] == pytest.approx(1000.0)
+
+
+def test_monthly_market_series_preserves_calendar_gaps_and_breaks_sparse_windows():
+    con = duckdb.connect(":memory:")
+    con.execute(
+        """
+        CREATE TABLE transactions (
+            bairro VARCHAR, tipo_construtivo VARCHAR, data_quitacao DATE,
+            valor_declarado DOUBLE, valor_base_calculo DOUBLE, area_construida DOUBLE
+        )
+        """
+    )
+    rows = [("ALFA", "AP", "2026-01-15", 100_000.0, 100_000.0, 100.0)] * 5
+    rows += [("ALFA", "AP", "2026-04-15", 900_000.0, 900_000.0, 100.0)] * 4
+    con.executemany("INSERT INTO transactions VALUES (?, ?, ?, ?, ?, ?)", rows)
+    try:
+        series = monthly_market_series(
+            con,
+            bairro="ALFA",
+            tipo="AP",
+            date_start="2026-01-01",
+            date_end="2026-04-30",
+            reference_m2_sql=RM,
+        )
+    finally:
+        con.close()
+
+    assert series["mes"].dt.strftime("%Y-%m").tolist() == [
+        "2026-01", "2026-02", "2026-03", "2026-04"
+    ]
+    april = series.set_index(series["mes"].dt.strftime("%Y-%m")).loc["2026-04"]
+    assert april["transacoes_3m"] == 4
+    assert pd.isna(april["mediana_m2_3m"])
+    assert not bool(april["amostra_suficiente"])
+
+
+def test_monthly_market_series_uses_two_prior_months_for_first_visible_point():
+    con = duckdb.connect(":memory:")
+    con.execute(
+        """
+        CREATE TABLE transactions (
+            bairro VARCHAR, tipo_construtivo VARCHAR, data_quitacao DATE,
+            valor_declarado DOUBLE, valor_base_calculo DOUBLE, area_construida DOUBLE
+        )
+        """
+    )
+    rows = [("ALFA", "AP", "2025-11-15", 100_000.0, 100_000.0, 100.0)] * 5
+    rows += [("ALFA", "AP", "2025-12-15", 200_000.0, 200_000.0, 100.0)] * 5
+    rows += [("ALFA", "AP", "2026-01-15", 300_000.0, 300_000.0, 100.0)] * 5
+    con.executemany("INSERT INTO transactions VALUES (?, ?, ?, ?, ?, ?)", rows)
+    try:
+        series = monthly_market_series(
+            con,
+            bairro="ALFA",
+            tipo="AP",
+            date_start="2026-01-01",
+            date_end="2026-01-31",
+            reference_m2_sql=RM,
+        )
+    finally:
+        con.close()
+
+    assert len(series) == 1
+    assert series.iloc[0]["transacoes_3m"] == 15
+    assert series.iloc[0]["mediana_m2_3m"] == pytest.approx(2000.0)
 
 
 def test_neighborhood_snapshot_computes_changes_for_each_bairro():

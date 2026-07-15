@@ -1,17 +1,21 @@
 Quanto Vale BH
-Versão: 2026-07-14-gps-localizacao-assets-fix
+Versão: 2026-07-14-grafico-mercado-robusto
 
 Principais alterações:
 - mantém o resultado da avaliação em modal nativo do Streamlit, sem rolagem automática;
-- adiciona localização atual opcional por GPS nas abas Avaliar, Transações e Mercado;
-- exige ação explícita do usuário e permissão do navegador;
-- confirma o endereço aproximado antes de aplicar a localização;
-- executa a busca do imóvel, preenche a pesquisa de transações ou seleciona o bairro do Mercado;
-- usa geocodificação reversa com cache, identificação do aplicativo, atribuição e limitação de frequência;
-- o endpoint de geocodificação pode ser trocado por QV_REVERSE_GEOCODER_URL sem alterar o código;
-- corrige a publicação do componente GPS incluindo o frontend local completo e validando seus assets antes do uso.
+- mantém a localização atual opcional por GPS nas abas Avaliar, Transações e Mercado;
+- mantém o frontend local completo do componente GPS e a validação dos seus assets;
+- corrige a série histórica do Mercado: cada ponto agora usa a mediana de todas as transações válidas da janela móvel de três meses, e não a mediana das medianas mensais;
+- usa janelas de três meses-calendário reais, inclusive nos meses sem transações;
+- omite pontos com menos de 5 transações na janela e interrompe a linha, evitando tendências artificiais;
+- mostra no tooltip o valor por m² e a quantidade de transações que sustentam cada ponto;
+- preserva Belo Horizonte como série de comparação quando um bairro é selecionado.
 
 Validação:
-- 75 testes da suíte principal aprovados;
-- 3 verificações automatizadas adicionais do fluxo GPS no AppTest aprovadas;
-- compilação completa, Ruff, pip check e health check do servidor aprovados.
+- 79 testes automatizados aprovados;
+- teste específico comprova a diferença entre a mediana correta das transações agrupadas e a antiga mediana de medianas mensais;
+- testes específicos cobrem lacunas de calendário, amostra mínima e uso dos dois meses anteriores no primeiro ponto visível;
+- compilação completa aprovada;
+- Ruff para erros críticos aprovado;
+- pip check sem dependências quebradas em ambiente virtual limpo;
+- health check do servidor Streamlit aprovado.
