@@ -10,9 +10,76 @@ from typing import Any, Callable
 import requests
 
 DEFAULT_REVERSE_GEOCODER_URL = "https://nominatim.openstreetmap.org/reverse"
+DEFAULT_FORWARD_GEOCODER_URL = "https://nominatim.openstreetmap.org/search"
 APP_USER_AGENT = "QuantoValeBH/2026.07 (+https://itbi-bh-bruno.streamlit.app/)"
 _REVERSE_REQUEST_LOCK = Lock()
 _LAST_REVERSE_REQUEST_AT = 0.0
+
+# Caixa delimitadora aproximada de Belo Horizonte (lat_min, lat_max, lon_min, lon_max).
+# Coordenadas geocodificadas fora dessa caixa são descartadas para evitar que um
+# nome de bairro ambíguo caia em outra cidade.
+BH_BOUNDING_BOX = (-20.10, -19.75, -44.10, -43.82)
+
+
+def geocode_neighborhood(
+    bairro: str,
+    *,
+    endpoint: str | None = None,
+    requester: Callable[..., Any] = requests.get,
+    timeout: float = 12.0,
+    min_interval_seconds: float = 1.0,
+) -> tuple[float, float] | None:
+    """Converte o nome de um bairro de BH em coordenadas (lat, lon) via Nominatim.
+
+    Retorna ``None`` quando o serviço não encontra o bairro ou quando o resultado
+    cai fora de Belo Horizonte. Respeita o mesmo limite de 1 requisição por
+    segundo compartilhado com a geocodificação reversa.
+    """
+    global _LAST_REVERSE_REQUEST_AT
+
+    name = "" if bairro is None else str(bairro).strip()
+    if not name:
+        return None
+
+    url = endpoint or os.getenv("QV_FORWARD_GEOCODER_URL") or DEFAULT_FORWARD_GEOCODER_URL
+    params = {
+        "q": f"{name}, Belo Horizonte, Minas Gerais, Brasil",
+        "format": "jsonv2",
+        "limit": 1,
+        "countrycodes": "br",
+        "accept-language": "pt-BR,pt",
+    }
+    headers = {
+        "User-Agent": APP_USER_AGENT,
+        "Referer": "https://itbi-bh-bruno.streamlit.app/",
+    }
+
+    with _REVERSE_REQUEST_LOCK:
+        if min_interval_seconds > 0:
+            elapsed = time.monotonic() - _LAST_REVERSE_REQUEST_AT
+            wait_for = max(0.0, min_interval_seconds - elapsed)
+            if wait_for:
+                time.sleep(wait_for)
+
+        response = requester(url, params=params, headers=headers, timeout=timeout)
+        _LAST_REVERSE_REQUEST_AT = time.monotonic()
+
+    response.raise_for_status()
+    data = response.json()
+    if not isinstance(data, list) or not data:
+        return None
+
+    item = data[0]
+    try:
+        latitude = float(item["lat"])
+        longitude = float(item["lon"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+    lat_min, lat_max, lon_min, lon_max = BH_BOUNDING_BOX
+    if not (lat_min <= latitude <= lat_max and lon_min <= longitude <= lon_max):
+        return None
+    return (latitude, longitude)
 
 
 def _normalize(value: object) -> str:

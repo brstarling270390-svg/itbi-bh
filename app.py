@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 from urllib.parse import quote_plus
 import html
+import json
 import re
 
 import pandas as pd
@@ -29,6 +30,7 @@ from market_logic import (
 )
 from location_component import current_location
 from location_logic import (
+    geocode_neighborhood,
     geolocation_error_message,
     location_confirmation_label,
     location_details,
@@ -66,120 +68,208 @@ st.markdown(
     <style>
     :root {
         --qv-blue: #2f6fed;
-        --qv-soft: rgba(127,127,127,.08);
-        --qv-border: rgba(127,127,127,.23);
+        --qv-blue-strong: #1f57cf;
+        --qv-blue-ink: #2f6fed;
+        --qv-accent-grad: linear-gradient(135deg, #2f6fed 0%, #5b8bff 100%);
+        --qv-soft: rgba(127,127,127,.07);
+        --qv-soft-2: rgba(127,127,127,.12);
+        --qv-border: rgba(127,127,127,.20);
+        --qv-border-strong: rgba(127,127,127,.30);
         --qv-muted: rgba(127,127,127,.90);
+        --qv-shadow: 0 1px 2px rgba(15,23,42,.04), 0 8px 24px rgba(15,23,42,.05);
+        --qv-shadow-hover: 0 2px 4px rgba(15,23,42,.06), 0 14px 34px rgba(15,23,42,.09);
+        --qv-radius: 16px;
+        --qv-radius-lg: 20px;
+        --qv-good: #0ca30c;
+        --qv-bad: #d03b3b;
+    }
+
+    html, body, [class*="css"] {
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     }
 
     .block-container {
-        padding-top: 1rem;
+        padding-top: 1.4rem;
         padding-bottom: 3rem;
-        max-width: 1000px;
+        max-width: 1020px;
     }
 
     [data-testid="stHeader"] {background: transparent;}
     #MainMenu, footer {visibility: hidden;}
 
+    /* ---- Indicadores (metric cards) ---- */
     [data-testid="stMetric"] {
         background: var(--qv-soft);
         border: 1px solid var(--qv-border);
-        border-radius: 16px;
-        padding: .85rem 1rem;
+        border-radius: var(--qv-radius);
+        padding: 1rem 1.1rem;
+        box-shadow: var(--qv-shadow);
+        transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
     }
-    [data-testid="stMetricLabel"] {opacity: .72;}
-    [data-testid="stMetricValue"] {font-size: 1.42rem;}
+    [data-testid="stMetric"]:hover {
+        transform: translateY(-2px);
+        box-shadow: var(--qv-shadow-hover);
+        border-color: var(--qv-border-strong);
+    }
+    [data-testid="stMetricLabel"] {opacity: .72; font-weight: 600;}
+    [data-testid="stMetricLabel"] p {font-size: .82rem !important;}
+    [data-testid="stMetricValue"] {
+        font-size: 1.5rem;
+        font-weight: 800;
+        letter-spacing: -.015em;
+    }
+    [data-testid="stMetricValue"] p {
+        white-space: normal !important;
+        overflow: visible !important;
+        text-overflow: clip !important;
+        line-height: 1.15;
+    }
 
     div[data-testid="stForm"] {
         border: 1px solid var(--qv-border);
-        border-radius: 18px;
-        padding: 1rem 1.05rem .8rem;
+        border-radius: var(--qv-radius-lg);
+        padding: 1.1rem 1.15rem .9rem;
         background: var(--qv-soft);
+        box-shadow: var(--qv-shadow);
     }
 
     div[data-baseweb="select"] > div,
     div[data-baseweb="input"] > div,
     [data-testid="stDateInput"] input {
-        border-radius: 10px !important;
+        border-radius: 11px !important;
     }
 
-    [data-testid="stBaseButton-primary"] {
-        background: var(--qv-blue) !important;
-        border-color: var(--qv-blue) !important;
+    /* ---- Botões ---- */
+    [data-testid="stBaseButton-primary"],
+    [data-testid="stBaseButton-primaryFormSubmit"] {
+        background: var(--qv-accent-grad) !important;
+        border: none !important;
         color: #fff !important;
         font-weight: 700 !important;
+        border-radius: 12px !important;
+        box-shadow: 0 6px 16px rgba(47,111,237,.30) !important;
+        transition: transform .15s ease, box-shadow .15s ease, filter .15s ease;
     }
-    [data-testid="stBaseButton-primary"]:hover {
-        filter: brightness(1.05);
+    [data-testid="stBaseButton-primary"]:hover,
+    [data-testid="stBaseButton-primaryFormSubmit"]:hover {
+        filter: brightness(1.04);
+        transform: translateY(-1px);
+        box-shadow: 0 10px 22px rgba(47,111,237,.38) !important;
     }
-
-    div[data-testid="stSegmentedControl"] button {
-        min-height: 2.65rem;
-        border-radius: 10px !important;
-        font-weight: 650;
+    [data-testid="stBaseButton-secondary"] {
+        border-radius: 12px !important;
+        border: 1px solid var(--qv-border-strong) !important;
+        transition: border-color .15s ease, background .15s ease;
     }
-    div[data-testid="stSegmentedControl"] button[aria-pressed="true"] {
-        color: var(--qv-blue) !important;
+    [data-testid="stBaseButton-secondary"]:hover {
         border-color: var(--qv-blue) !important;
+        color: var(--qv-blue) !important;
     }
 
-    .brand {padding: .2rem 0 .35rem;}
+    /* ---- Controle segmentado (abas) ---- */
+    div[data-testid="stButtonGroup"] button {
+        min-height: 2.7rem;
+        border-radius: 11px !important;
+        font-weight: 650;
+        transition: all .15s ease;
+    }
+    div[data-testid="stButtonGroup"] button[aria-checked="true"],
+    div[data-testid="stButtonGroup"] button[aria-pressed="true"] {
+        background: var(--qv-accent-grad) !important;
+        color: #fff !important;
+        border-color: transparent !important;
+        box-shadow: 0 4px 12px rgba(47,111,237,.28);
+    }
+    div[data-testid="stButtonGroup"] button[aria-checked="true"] *,
+    div[data-testid="stButtonGroup"] button[aria-pressed="true"] * {
+        color: #fff !important;
+    }
+
+    /* ---- Cabeçalho / marca ---- */
+    .brand {padding: .1rem 0 .5rem;}
     .brand-name {
-        color: var(--qv-blue);
-        font-size: .86rem;
+        display: inline-block;
+        color: #fff;
+        background: var(--qv-accent-grad);
+        font-size: .72rem;
         font-weight: 800;
-        letter-spacing: .09em;
+        letter-spacing: .10em;
         text-transform: uppercase;
-        margin-bottom: .4rem;
+        margin-bottom: .7rem;
+        padding: .28rem .7rem;
+        border-radius: 999px;
+        box-shadow: 0 4px 12px rgba(47,111,237,.28);
     }
     .brand-title {
-        font-size: 2.15rem;
+        font-size: 2.3rem;
         font-weight: 800;
-        line-height: 1.1;
+        line-height: 1.08;
+        letter-spacing: -.02em;
         margin: 0;
         max-width: 820px;
     }
     .brand-subtitle {
-        opacity: .72;
-        font-size: .98rem;
-        margin-top: .55rem;
+        opacity: .74;
+        font-size: 1rem;
+        margin-top: .6rem;
         max-width: 760px;
+        line-height: 1.5;
     }
 
     .section-intro {
         opacity: .70;
         margin-top: -.35rem;
         margin-bottom: 1rem;
+        line-height: 1.5;
     }
 
     .data-note {
+        display: flex;
+        align-items: center;
+        gap: .55rem;
+        background: var(--qv-soft);
+        border: 1px solid var(--qv-border);
         border-left: 3px solid var(--qv-blue);
-        padding: .1rem 0 .1rem .8rem;
-        opacity: .72;
-        font-size: .86rem;
-        margin: .8rem 0 1.2rem;
+        border-radius: 12px;
+        padding: .6rem .9rem;
+        opacity: .92;
+        font-size: .88rem;
+        margin: .9rem 0 1.3rem;
     }
 
     .result-box {
-        padding: 1.25rem 1.3rem;
+        padding: 1.4rem 1.4rem;
         border: 1px solid var(--qv-border);
-        border-radius: 18px;
+        border-radius: var(--qv-radius-lg);
         margin: .5rem 0 1rem;
         background: var(--qv-soft);
+        box-shadow: var(--qv-shadow);
+    }
+    .result-box.result-hero {
+        border: 1px solid rgba(47,111,237,.25);
+        background:
+            radial-gradient(120% 140% at 0% 0%, rgba(47,111,237,.10) 0%, rgba(47,111,237,0) 55%),
+            var(--qv-soft);
     }
     .result-title {
-        font-size: .86rem;
+        font-size: .82rem;
         opacity: .72;
-        margin-bottom: .25rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: .05em;
+        margin-bottom: .3rem;
     }
     .result-value {
-        font-size: 2rem;
+        font-size: 2.15rem;
         font-weight: 800;
         line-height: 1.12;
+        letter-spacing: -.02em;
     }
     .muted {
         opacity: .68;
         font-size: .9rem;
         margin-top: .35rem;
+        line-height: 1.5;
     }
 
     .address-title {
@@ -204,15 +294,22 @@ st.markdown(
         padding-top: 1rem;
         opacity: .62;
         font-size: .82rem;
+        line-height: 1.55;
+    }
+
+    hr {
+        border: none;
+        border-top: 1px solid var(--qv-border);
+        margin: 1.4rem 0;
     }
 
     @media (max-width: 768px) {
         .block-container {padding: .75rem .7rem 2.2rem;}
-        .brand-title {font-size: 1.72rem;}
-        .brand-subtitle {font-size: .9rem;}
+        .brand-title {font-size: 1.78rem;}
+        .brand-subtitle {font-size: .92rem;}
         h2 {font-size: 1.32rem !important;}
         h3 {font-size: 1.15rem !important;}
-        [data-testid="stMetricValue"] {font-size: 1.18rem;}
+        [data-testid="stMetricValue"] {font-size: 1.28rem;}
         [data-testid="stHorizontalBlock"] {flex-wrap: wrap;}
         [data-testid="column"] {
             min-width: 100% !important;
@@ -220,12 +317,12 @@ st.markdown(
             flex: 1 1 100% !important;
         }
         button {min-height: 2.9rem;}
-        .result-value {font-size: 1.55rem;}
-        div[data-testid="stSegmentedControl"] {
+        .result-value {font-size: 1.7rem;}
+        div[data-testid="stButtonGroup"] {
             overflow-x: auto;
             padding-bottom: .15rem;
         }
-        div[data-testid="stSegmentedControl"] button {
+        div[data-testid="stButtonGroup"] button {
             white-space: nowrap;
             padding-left: .7rem !important;
             padding-right: .7rem !important;
@@ -235,6 +332,120 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+
+# Paleta e estilo comum dos gráficos Plotly. Cores e eixos usam tons
+# semitransparentes de cinza para permanecerem legíveis em tema claro e escuro,
+# sem depender de detecção de tema. A série principal usa o azul da marca; a
+# comparação com Belo Horizonte usa um cinza neutro (baseline), sempre distinguível.
+QV_SERIES_PRIMARY = "#2f6fed"
+QV_SERIES_COMPARISON = "#94a3b8"
+QV_SEQUENTIAL = "#2f6fed"
+QV_GRID = "rgba(128,128,128,.16)"
+QV_AXIS_TEXT = "rgba(130,130,130,.95)"
+QV_PLOT_CONFIG = {"displayModeBar": False, "displaylogo": False}
+
+
+def style_plotly(fig, *, show_legend: bool = False):
+    """Aplica o tema visual consistente do app a uma figura Plotly."""
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(
+            family='system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
+            color=QV_AXIS_TEXT,
+            size=13,
+        ),
+        margin=dict(l=10, r=10, t=18, b=10),
+        hoverlabel=dict(
+            bgcolor="rgba(30,41,59,.94)",
+            bordercolor="rgba(30,41,59,.94)",
+            font=dict(color="#fff", size=12.5),
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="left",
+            x=0,
+            title_text="",
+        ),
+        showlegend=show_legend,
+    )
+    fig.update_xaxes(
+        showgrid=False,
+        zeroline=False,
+        showline=False,
+        ticks="outside",
+        tickcolor="rgba(128,128,128,.25)",
+        ticklen=4,
+    )
+    fig.update_yaxes(
+        showgrid=True,
+        gridcolor=QV_GRID,
+        zeroline=False,
+        showline=False,
+    )
+    return fig
+
+
+# Coordenadas dos bairros para o mapa. São geocodificadas uma única vez pelo
+# OpenStreetMap/Nominatim (respeitando o limite de 1 req/s) e guardadas em disco,
+# para que as próximas aberturas não dependam da rede. O mapa do ITBI não traz
+# coordenadas por transação; por isso a granularidade é por bairro.
+BAIRROS_COORDS_PATH = DB_PATH.with_name("bairros_coords.json")
+# Escala sequencial azul (evita tons quase brancos que sumiriam no mapa claro).
+QV_MAP_COLORSCALE = ["#86b6ef", "#5598e7", "#2a78d6", "#1c5cab", "#104281", "#0d366b"]
+BH_MAP_CENTER = {"lat": -19.919, "lon": -43.938}
+
+
+def _load_bairros_coords() -> dict:
+    try:
+        data = json.loads(BAIRROS_COORDS_PATH.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, ValueError, OSError):
+        return {}
+
+
+def _save_bairros_coords(cache: dict) -> None:
+    tmp = BAIRROS_COORDS_PATH.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(BAIRROS_COORDS_PATH)
+
+
+def neighborhood_coordinates(bairros: tuple[str, ...], max_new: int = 80) -> dict:
+    """Retorna {bairro: (lat, lon)} para os bairros pedidos.
+
+    Lê o cache em disco e só consulta a rede para bairros ainda desconhecidos,
+    limitado a ``max_new`` por execução para não travar a interface. Bairros não
+    localizados são marcados como nulos no cache para não repetir a tentativa.
+    """
+    cache = _load_bairros_coords()
+    pending = [str(b) for b in bairros if str(b) not in cache]
+    if pending:
+        to_fetch = pending[:max_new]
+        changed = False
+        with st.spinner(
+            f"Localizando bairros no mapa pela primeira vez… ({len(to_fetch)} bairro(s))"
+        ):
+            for name in to_fetch:
+                try:
+                    result = geocode_neighborhood(name)
+                except Exception:  # noqa: BLE001 — rede indisponível não deve quebrar o app
+                    result = None
+                cache[name] = [result[0], result[1]] if result else None
+                changed = True
+        if changed:
+            try:
+                _save_bairros_coords(cache)
+            except OSError:
+                pass
+    coords: dict[str, tuple[float, float]] = {}
+    for b in bairros:
+        value = cache.get(str(b))
+        if value:
+            coords[str(b)] = (float(value[0]), float(value[1]))
+    return coords
 
 
 def brl(value: float | int | None, decimals: int = 0) -> str:
@@ -1207,13 +1418,17 @@ def render_hybrid_result() -> None:
             y="value",
             text_auto=".3s",
             labels={"source": "Referência", "value": "Valor estimado"},
+            color_discrete_sequence=[QV_SEQUENTIAL],
         )
-        fig.update_layout(
-            yaxis_tickprefix="R$ ",
-            margin=dict(l=10, r=10, t=20, b=10),
-            showlegend=False,
+        fig.update_traces(
+            marker_line_width=0,
+            textposition="outside",
+            textfont_size=12,
+            cliponaxis=False,
         )
-        st.plotly_chart(fig, width="stretch")
+        style_plotly(fig)
+        fig.update_layout(yaxis_tickprefix="R$ ")
+        st.plotly_chart(fig, width="stretch", config=QV_PLOT_CONFIG)
 
         st.info(
             "O valor central é a **mediana das referências complementares disponíveis**. "
@@ -1310,16 +1525,14 @@ def render_hybrid_result() -> None:
                         f"Ver como chegamos a {brl(row['valor_equivalente_atual'])}"
                     ):
                         st.markdown(
-                            f"""
-**1. Transformamos a transação em valor por m² cadastral**  
-{brl(breakdown['reference_value'])} ÷ {number_br(breakdown['transaction_area'], 2)} m² = **{brl(breakdown['reference_m2'], 2)}/m²**
-
-**2. Aplicamos esse valor por m² à área cadastral do imóvel avaliado**  
-{brl(breakdown['reference_m2'], 2)}/m² × {number_br(breakdown['subject_area'], 2)} m² = **{brl(breakdown['area_adjusted_value'])}**
-
-**3. Só então atualizamos temporalmente pelo FipeZAP**  
-{brl(breakdown['area_adjusted_value'])} × {number_br(breakdown['fipe_factor'], 4)} = **{brl(breakdown['current_equivalent'])}**
-                            """
+                            (
+                                "**1. Transformamos a transação em valor por m² cadastral**\n\n"
+                                f"{brl(breakdown['reference_value'])} ÷ {number_br(breakdown['transaction_area'], 2)} m² = **{brl(breakdown['reference_m2'], 2)}/m²**\n\n"
+                                "**2. Aplicamos esse valor por m² à área cadastral do imóvel avaliado**\n\n"
+                                f"{brl(breakdown['reference_m2'], 2)}/m² × {number_br(breakdown['subject_area'], 2)} m² = **{brl(breakdown['area_adjusted_value'])}**\n\n"
+                                "**3. Só então atualizamos temporalmente pelo FipeZAP**\n\n"
+                                f"{brl(breakdown['area_adjusted_value'])} × {number_br(breakdown['fipe_factor'], 4)} = **{brl(breakdown['current_equivalent'])}**"
+                            ).replace("$", "\\$")
                         )
                         st.caption(
                             "Os valores intermediários exibidos são arredondados para facilitar a leitura. O cálculo usa os valores completos armazenados na base."
@@ -1985,19 +2198,43 @@ elif screen == "Transações":
                 dimensions["min_date"],
                 dimensions["max_date"] - timedelta(days=730),
             )
-            dates = st.date_input(
+            period_choice = st.segmented_control(
                 "Período da transação",
-                value=(default_start, dimensions["max_date"]),
-                min_value=dimensions["min_date"],
-                max_value=dimensions["max_date"],
+                ["Últimos 12 meses", "Últimos 2 anos", "Últimos 5 anos", "Tudo", "Personalizado"],
+                default="Últimos 2 anos",
+                key="transaction_period",
             )
+            with st.expander("Escolher datas específicas"):
+                custom_dates = st.date_input(
+                    "Intervalo personalizado",
+                    value=(default_start, dimensions["max_date"]),
+                    min_value=dimensions["min_date"],
+                    max_value=dimensions["max_date"],
+                    key="transaction_custom_dates",
+                    label_visibility="collapsed",
+                )
+                st.caption(
+                    'Escolha a data inicial e a final. Só é aplicado quando o período acima está em "Personalizado".'
+                )
             st.form_submit_button(
                 "Buscar transações",
                 type="primary",
                 width="stretch",
             )
 
-        date_start, date_end = normalize_date_range(dates)
+        # Converte a escolha de período em um intervalo de datas consultável.
+        min_d = dimensions["min_date"]
+        max_d = dimensions["max_date"]
+        if period_choice == "Últimos 12 meses":
+            date_start, date_end = max(min_d, max_d - timedelta(days=365)), max_d
+        elif period_choice == "Últimos 5 anos":
+            date_start, date_end = max(min_d, max_d - timedelta(days=1826)), max_d
+        elif period_choice == "Tudo":
+            date_start, date_end = min_d, max_d
+        elif period_choice == "Personalizado":
+            date_start, date_end = normalize_date_range(custom_dates)
+        else:  # "Últimos 2 anos" (padrão) ou nenhuma seleção
+            date_start, date_end = max(min_d, max_d - timedelta(days=730)), max_d
 
         result, stats = query_transactions(
             search_text,
@@ -2214,11 +2451,14 @@ elif screen == "Mercado":
         c4.metric(
             "Faixa central por m²",
             (
-                f"{brl(q25_m2, 0)} – {brl(q75_m2, 0)}"
+                # Formato compacto (um só "R$") para caber no card estreito.
+                # Escapa o cifrão: o valor do metric é Markdown e "R$ … R$"
+                # seria lido como fórmula matemática ($…$).
+                f"{brl(q25_m2, 0)} – {number_br(q75_m2, 0)}".replace("$", "\\$")
                 if q25_m2 is not None and q75_m2 is not None
                 else "—"
             ),
-            help="Intervalo entre o 25º e o 75º percentil dos últimos 12 meses.",
+            help="Intervalo entre o 25º e o 75º percentil (por m²) dos últimos 12 meses.",
         )
 
         reading = market_reading(scope_label, market_stats, city_stats)
@@ -2303,14 +2543,23 @@ elif screen == "Mercado":
                 "<extra></extra>"
             ),
         )
-        fig.update_layout(
-            yaxis_tickprefix="R$ ",
-            hovermode="closest",
-            margin=dict(l=10, r=10, t=20, b=10),
-            legend_title_text="",
-            showlegend=len(plot_frames) > 1,
-        )
-        st.plotly_chart(fig, width="stretch")
+        # Série principal (recorte selecionado) em azul da marca; comparação com
+        # Belo Horizonte em cinza neutro (baseline). Distinguível em daltonismo
+        # por ser cromático × neutro, além da legenda.
+        for trace in fig.data:
+            is_comparison = trace.name == "Belo Horizonte" and len(plot_frames) > 1
+            color = QV_SERIES_COMPARISON if is_comparison else QV_SERIES_PRIMARY
+            trace.line.color = color
+            trace.line.width = 2 if is_comparison else 2.6
+            if is_comparison:
+                trace.line.dash = "dot"
+            trace.marker.color = color
+            trace.marker.size = 6.5
+            trace.marker.line.width = 2
+            trace.marker.line.color = "rgba(255,255,255,.65)"
+        style_plotly(fig, show_legend=len(plot_frames) > 1)
+        fig.update_layout(yaxis_tickprefix="R$ ", hovermode="closest")
+        st.plotly_chart(fig, width="stretch", config=QV_PLOT_CONFIG)
         st.caption(
             f"Cada ponto é a mediana de todas as transações válidas da janela de três meses encerrada naquele mês. "
             f"Janelas com menos de {MIN_WINDOW_TRANSACTIONS} transações são omitidas e interrompem a linha, em vez de criar uma tendência artificial. "
@@ -2338,12 +2587,16 @@ elif screen == "Mercado":
                 y="transacoes",
                 text="transacoes",
                 labels={"faixa": "Faixa de valor", "transacoes": "Transações"},
+                color_discrete_sequence=[QV_SEQUENTIAL],
             )
-            fig_prices.update_layout(
-                margin=dict(l=10, r=10, t=20, b=10),
-                showlegend=False,
+            fig_prices.update_traces(
+                marker_line_width=0,
+                textposition="outside",
+                textfont_size=12,
+                cliponaxis=False,
             )
-            st.plotly_chart(fig_prices, width="stretch")
+            style_plotly(fig_prices)
+            st.plotly_chart(fig_prices, width="stretch", config=QV_PLOT_CONFIG)
         st.caption(
             "Faixas calculadas com o valor de referência das transações dos últimos 12 meses."
         )
@@ -2353,6 +2606,103 @@ elif screen == "Mercado":
         dimensions["max_date"],
         db_mtime,
     )
+
+    st.markdown("---")
+    st.subheader("Mapa dos bairros de Belo Horizonte")
+    st.markdown(
+        '<div class="section-intro">Cada bolha é um bairro. A <b>cor</b> mostra o valor por m² '
+        'e o <b>tamanho</b>, o volume de negócios nos últimos 12 meses.</div>',
+        unsafe_allow_html=True,
+    )
+    map_pool = eligible_neighborhoods(
+        snapshot,
+        min_transactions=5,
+        min_window_transactions=1,
+    )
+    # Mantém o mapa limpo e a geocodificação leve: mostra os bairros com maior
+    # volume de negócios (os mais representativos). O bairro selecionado é sempre
+    # incluído, mesmo que fique fora do corte por volume.
+    MAP_MAX_NEIGHBORHOODS = 60
+    if not map_pool.empty and len(map_pool) > MAP_MAX_NEIGHBORHOODS:
+        top_pool = map_pool.nlargest(MAP_MAX_NEIGHBORHOODS, "records_12m")
+        if bairro_market is not None and bairro_market not in set(top_pool["bairro"]):
+            selected_row = map_pool[map_pool["bairro"] == bairro_market]
+            top_pool = pd.concat([top_pool, selected_row], ignore_index=True)
+        map_pool = top_pool
+    if map_pool.empty:
+        st.info("Não há bairros com amostra suficiente para desenhar o mapa neste recorte.")
+    else:
+        coords = neighborhood_coordinates(tuple(sorted(map_pool["bairro"].tolist())))
+        map_df = map_pool[map_pool["bairro"].isin(coords)].copy()
+        if map_df.empty:
+            st.info(
+                "Não foi possível localizar os bairros no mapa agora. "
+                "Tente novamente em instantes (o serviço de mapas pode estar indisponível)."
+            )
+        else:
+            map_df["lat"] = map_df["bairro"].map(lambda b: coords[b][0])
+            map_df["lon"] = map_df["bairro"].map(lambda b: coords[b][1])
+            map_df["bairro_titulo"] = map_df["bairro"].map(smart_title)
+            map_df["valor_m2_fmt"] = map_df["current_m2"].apply(lambda v: brl(v, 0))
+            map_df["volume_fmt"] = map_df["records_12m"].apply(number_br)
+            center = BH_MAP_CENTER
+            if bairro_market is not None and bairro_market in coords:
+                center = {"lat": coords[bairro_market][0], "lon": coords[bairro_market][1]}
+            fig_map = px.scatter_map(
+                map_df,
+                lat="lat",
+                lon="lon",
+                size="records_12m",
+                color="current_m2",
+                size_max=32,
+                zoom=10.6 if bairro_market is None else 12.0,
+                center=center,
+                hover_name="bairro_titulo",
+                custom_data=["valor_m2_fmt", "volume_fmt"],
+                color_continuous_scale=QV_MAP_COLORSCALE,
+                map_style="carto-positron",
+            )
+            fig_map.update_traces(
+                marker={"opacity": 0.82},
+                hovertemplate=(
+                    "<b>%{hovertext}</b><br>"
+                    "%{customdata[0]} por m² cadastral<br>"
+                    "%{customdata[1]} negócios em 12 meses"
+                    "<extra></extra>"
+                ),
+            )
+            fig_map.update_layout(
+                margin=dict(l=0, r=0, t=0, b=0),
+                height=470,
+                paper_bgcolor="rgba(0,0,0,0)",
+                coloraxis_colorbar=dict(
+                    title="R$/m²",
+                    thickness=12,
+                    len=0.7,
+                    outlinewidth=0,
+                ),
+                font=dict(family='system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'),
+                hoverlabel=dict(
+                    bgcolor="rgba(30,41,59,.94)",
+                    bordercolor="rgba(30,41,59,.94)",
+                    font=dict(color="#fff", size=12.5),
+                ),
+            )
+            st.plotly_chart(fig_map, width="stretch", config=QV_PLOT_CONFIG)
+            pendentes = len(map_pool) - len(map_df)
+            legenda = "Passe o cursor sobre um bairro para ver o valor por m² e o número de negócios."
+            if pendentes > 0:
+                legenda += (
+                    f" {number_br(pendentes)} bairro(s) ainda serão localizados nas próximas aberturas."
+                )
+            st.caption(legenda)
+
+        # Atalho para abrir a região no Google Maps (visão familiar de ruas/satélite).
+        st.link_button(
+            f"📍 Abrir {scope_label} no Google Maps",
+            google_maps_url(None, bairro_market),
+            help="Abre o Google Maps na região selecionada, para ver ruas e pontos de referência.",
+        )
 
     st.markdown("---")
     st.subheader("Compare bairros")
