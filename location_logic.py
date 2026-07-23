@@ -269,8 +269,13 @@ def location_details(
 
 def transaction_location_prefill(details: dict[str, Any]) -> dict[str, Any]:
     bairro = details.get("bairro")
+    # Busca por rua, sem número: a pesquisa de transações lista vários resultados
+    # da mesma rua, e o número devolvido pelo GPS raramente coincide com o de uma
+    # transação de fato registrada (a base do ITBI não cobre todo endereço). Incluir
+    # o número faria a busca por texto exigi-lo e costumava zerar os resultados.
+    text = details.get("road") or details.get("search_text") or ""
     return {
-        "text": details.get("search_text") or "",
+        "text": text,
         "bairros": [bairro] if bairro else [],
         "tipos": [],
     }
