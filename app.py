@@ -2255,7 +2255,7 @@ elif screen == "Transações":
                 st.caption(
                     'Escolha a data inicial e a final. Só é aplicado quando o período acima está em "Personalizado".'
                 )
-            st.form_submit_button(
+            searched = st.form_submit_button(
                 "Buscar transações",
                 type="primary",
                 width="stretch",
@@ -2283,6 +2283,21 @@ elif screen == "Transações":
             date_start,
             date_end,
         )
+
+        # Confirmação explícita de que a busca rodou. Sem isso, clicar em
+        # "Buscar transações" atualizava a lista abaixo mas passava a sensação
+        # de que "nada aconteceu". O banner só aparece logo após o clique.
+        if searched:
+            if stats["records"] > 0:
+                st.success(
+                    f"✅ Busca realizada: {number_br(stats['records'])} transação(ões) encontrada(s). "
+                    "Veja os resultados abaixo."
+                )
+            else:
+                st.warning(
+                    "🔍 Busca realizada, mas nenhuma transação foi encontrada para esses filtros. "
+                    "Tente ampliar o período ou remover algum filtro."
+                )
 
         c1, c2, c3 = st.columns(3)
         c1.metric(
