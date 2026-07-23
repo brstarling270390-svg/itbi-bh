@@ -594,6 +594,42 @@ def maps_button(endereco: object, bairro: object, *, key: str | None = None) -> 
     )
 
 
+def friendly_update_error(exc: Exception) -> tuple[str, str]:
+    """Traduz uma falha de conexão com a PBH numa mensagem clara para o usuário.
+
+    A PBH usa um firewall que, ocasionalmente, deixa de responder para o servidor
+    onde este app roda (mesmo que o site funcione normalmente num navegador comum).
+    Isso é externo ao app; aqui só tornamos o aviso compreensível, sem tentar
+    contornar o bloqueio. Retorna (mensagem para o usuário, detalhe técnico).
+    """
+    detail = str(exc)
+    host_match = re.search(r"host=['\"]?([\w.\-]+)", detail)
+    host_text = f" ({host_match.group(1)})" if host_match else ""
+    lowered = detail.lower()
+
+    if "read timed out" in lowered:
+        reason = f"O servidor da Prefeitura{host_text} recebeu a solicitação, mas não respondeu a tempo."
+    elif "connect timeout" in lowered or "timed out" in lowered:
+        reason = f"Não foi possível conectar ao servidor da Prefeitura{host_text} — a conexão não respondeu a tempo."
+    elif any(
+        term in lowered
+        for term in ("max retries exceeded", "connection refused", "name or service not known", "failed to resolve")
+    ):
+        reason = f"Não foi possível estabelecer conexão com o servidor da Prefeitura{host_text}."
+    elif "403" in detail:
+        reason = f"O servidor da Prefeitura{host_text} recusou a conexão (código 403)."
+    elif any(code in detail for code in ("500", "502", "503", "504")):
+        reason = f"O servidor da Prefeitura{host_text} respondeu com um erro interno."
+    else:
+        reason = "Não foi possível concluir a atualização dos dados da Prefeitura agora."
+
+    message = (
+        f"{reason} Isso costuma ser uma instabilidade do lado do portal de dados abertos da PBH, "
+        "não deste aplicativo — tente novamente em alguns minutos."
+    )
+    return message, detail
+
+
 def run_update(force: bool = False, include_historical: bool = False) -> None:
     progress = st.progress(0, text="Iniciando atualização...")
 
@@ -633,7 +669,10 @@ def run_update(force: bool = False, include_historical: bool = False) -> None:
         )
     except Exception as exc:  # noqa: BLE001
         progress.empty()
-        st.error(f"A atualização não foi concluída: {exc}")
+        friendly_message, technical_detail = friendly_update_error(exc)
+        st.error(friendly_message)
+        with st.expander("Detalhe técnico"):
+            st.code(technical_detail)
 
 
 @st.cache_data(ttl=600)
