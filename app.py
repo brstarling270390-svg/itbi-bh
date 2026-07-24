@@ -2378,8 +2378,10 @@ elif screen == "Transações":
                                 stats=hybrid_stats,
                                 subject=transaction_subject(row),
                             )
-                            st.session_state["_go_screen"] = "Avaliar"
-                            st.rerun()
+                            # Abre o resultado direto no modal, sobre a própria aba
+                            # Transações (mesmo comportamento da aba Avaliar). Antes
+                            # o código apenas trocava de aba e o resultado não aparecia.
+                            show_hybrid_result_dialog()
 
                     if b2.button(
                         "Ver transações deste endereço",
